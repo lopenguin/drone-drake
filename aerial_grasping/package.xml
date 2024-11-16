@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>aerial_grasping</name>
+  <version>0.0.0</version>
+  <description>
+    Aggressive aerial grasping for manipulation 2024.
+  </description>
+  <maintainer email="manipulation-student@mit.edu">Lorenzo</maintainer>
+  <author>Lorenzo Shaikewitz</author>
+  <license>N/A</license>
+</package>
