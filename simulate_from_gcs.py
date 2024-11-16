@@ -65,8 +65,7 @@ if __name__ == '__main__':
 
     # Add drone to system
     traj_system = builder.AddSystem(FlatnessInverter(trajectory, animator))
-    quad = QuadrotorGeometry.AddToBuilder(builder, traj_system.get_output_port(0), scene_graph)
-    # TODO: custom quadrotor geometry?
+    quad = Quadrotor.AddToBuilder(builder, traj_system.get_output_port(0), scene_graph, plant)
 
     # Add visualizer and build
     diagram = builder.Build()

@@ -13,9 +13,9 @@ directives:
                 translation: [0, 0, 0.3]
                 rotation: !Rpy { deg: [90, 180, 180] }
 
-    # - add_model:
-    #     name: drone
-    #     file: package://aerial_grasping/assets/skydio_2/quadrotor_arm.urdf
-    #     default_free_body_pose:
-    #         base_link:
-    #             translation: [0.25,0.,0.8]
+    - add_model:
+        name: drone
+        file: package://aerial_grasping/assets/skydio_2/quadrotor_arm.urdf
+        default_free_body_pose:
+            base_link:
+                translation: [0.25,0.,0.8]

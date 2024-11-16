@@ -161,15 +161,16 @@ Adapted from Drake examples:
 https://github.com/RobotLocomotion/drake/blob/master/examples/quadrotor/quadrotor_geometry.cc
 '''
 class Quadrotor(LeafSystem):
-    def __init__(self, scene_graph):
+    def __init__(self, scene_graph, plant):
         LeafSystem.__init__(self)
         # create temporary plant to set everything up
-        plant = MultibodyPlant(0.0)
-        parser = Parser(plant, scene_graph)
-        parser.package_map().PopulateFromFolder("aerial_grasping")
-        model_idxs = parser.AddModelsFromUrl("package://aerial_grasping/assets/skydio_2/quadrotor_arm.urdf")
-        plant.Finalize()
+        # plant = MultibodyPlant(0.0)
+        # parser = Parser(plant, scene_graph)
+        # parser.package_map().PopulateFromFolder("aerial_grasping")
+        # self.model_idxs = parser.AddModelsFromUrl("package://aerial_grasping/assets/skydio_2/quadrotor_arm.urdf")[0]
+        # plant.Finalize()
 
+        self.model_idxs = plant.GetModelInstanceByName("drone")
 
         # connections
         self.DeclareVectorInputPort("quadrotor_state", 12)
@@ -177,7 +178,7 @@ class Quadrotor(LeafSystem):
             lambda: AbstractValue.Make(FramePoseVector()), self.OutputGeometryPose)
 
         # save frame
-        body_idxs = plant.GetBodyIndices(model_idxs[0])
+        body_idxs = plant.GetBodyIndices(self.model_idxs)
         drone_body_idx = body_idxs[0]
         self.source_id = plant.get_source_id()
         self.frame_id = plant.GetBodyFrameIdOrThrow(drone_body_idx)
@@ -206,11 +207,13 @@ class Quadrotor(LeafSystem):
         return output
 
     @staticmethod
-    def AddToBuilder(builder, state_port, scene_graph):
-        quadrotor = builder.AddSystem(Quadrotor(scene_graph))
+    def AddToBuilder(builder, state_port, scene_graph, plant):
+        quadrotor = builder.AddSystem(Quadrotor(scene_graph, plant))
         # connect drone ports
         builder.Connect(state_port, quadrotor.get_input_port(0))
-        builder.Connect(quadrotor.get_output_port(0), scene_graph.get_source_pose_port(quadrotor.source_id))
-        # TODO: connect arm ports?
+        # builder.Connect(quadrotor.get_output_port(0), scene_graph.get_source_pose_port(quadrotor.source_id))
+        builder.Connect(quadrotor.get_output_port(0), plant.get_desired_state_input_port(quadrotor.model_idxs))
+        # problem: not set up to control quadrotor ports
+        # potential solution: add motors?
 
         return quadrotor
