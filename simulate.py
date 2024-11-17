@@ -13,10 +13,9 @@ from pydrake.all import (
     ProcessModelDirectives,
     MeshcatVisualizer,
     Simulator,
-    ModelInstanceIndex
 )
 
-from utils import FlatnessInverter, make_bspline, SimpleController
+from utils import FlatnessInverter, make_bspline, SimpleController, DroneRotorController
 
 import pydot
 def save_diagram(diagram):
@@ -26,6 +25,7 @@ def save_diagram(diagram):
     with open('diagram.svg','wb') as png_file:
         png_file.write(pngfile)
 
+# def plot_ref_frame(meshcat) (see 8 set 3 / https://github.com/RussTedrake/manipulation/blob/master/manipulation/meshcat_utils.py)
 
 if __name__ == '__main__':
     ## Basic drone trajectory
@@ -69,14 +69,18 @@ if __name__ == '__main__':
     # Drone position -> poses
     traj_system = builder.AddSystem(FlatnessInverter(trajectory, animator))
 
-    # simple controller for drone
+    # simple controller for drone arm
     drone_instance = plant.GetModelInstanceByName("drone")
-    plant.GetJointByName("arm_sh0").set_position_limits(
-            [-np.inf], [np.inf]
-        )
-    # TODO: add 
-    controller = builder.AddNamedSystem("controller", SimpleController())
-    builder.Connect(controller.output_port, plant.get_actuation_input_port(drone_instance))
+    # plant.GetJointByName("arm_sh0").set_position_limits(
+    #         [-np.inf], [np.inf]
+    #     )
+    # # TODO: add motors to URDF
+    # controller = builder.AddNamedSystem("controller", SimpleController())
+    # builder.Connect(controller.output_port, plant.get_actuation_input_port(drone_instance))
+
+    # simple controller for drone
+    drone_controller = builder.AddNamedSystem("drone controller", DroneRotorController(plant))
+    builder.Connect(drone_controller.output_port, plant.get_applied_spatial_force_input_port())
 
     # Add visualizer and build
     diagram = builder.Build()

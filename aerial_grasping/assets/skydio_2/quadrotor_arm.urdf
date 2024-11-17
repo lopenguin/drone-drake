@@ -9,7 +9,7 @@
   Origin:
     (0, 0, 0) in the center of the main quadrotor body.
   -->
-  <link name="base_link">
+  <link name="quadrotor_link">
     <inertial>
       <mass value="0.775"/>
       <origin xyz="0 0 0"/>
@@ -67,7 +67,7 @@
   <joint name="arm_sh0" type="revolute">
     <origin xyz="-0.02 0.0 -0.06" rpy="0 3.14 3.14"/>
     <axis xyz="0 0 1"/>
-    <parent link="base_link"/>
+    <parent link="quadrotor_link"/>
     <child link="arm_link_sh0"/>
     <limit effort="1000" velocity="1000.00" lower="-2.61799387799149441136" upper="3.14159265358979311599"/>
   </joint>

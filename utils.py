@@ -15,6 +15,8 @@ from pydrake.all import (
     AbstractValue,
     FramePoseVector,
     RotationMatrix,
+    ExternallyAppliedSpatialForce,
+    SpatialForce,
 )
 
 '''
@@ -63,12 +65,48 @@ class SimpleController(LeafSystem):
 
     def DoCalcTimeDerivatives(self, context, derivatives):
         x = context.get_continuous_state_vector().GetAtIndex(0)
-        if (x > 1.):
-            xdot = -0.1
-        else:
-            xdot = 0.1
+        xdot = 0.001
         derivatives.get_mutable_vector().SetAtIndex(0, xdot)
 
+
+class DroneRotorController(LeafSystem):
+    def __init__(self, plant):
+        LeafSystem.__init__(self)
+
+        self.plant = plant
+        # self.DeclareVectorInputPort("yum", 12)
+        self.output_port = self.DeclareAbstractOutputPort("rotor_force",
+            lambda: AbstractValue.Make([ExternallyAppliedSpatialForce()]), self.CalcRotorForces)
+        
+    def CalcRotorForces(self, context, output):
+        drone_instance = self.plant.GetModelInstanceByName("drone")
+        quadrotor_body = self.plant.GetBodyIndices(drone_instance)[0]
+
+        # Plan:
+        # 1) apply forces at 4 rotors to compensate gravity (dynamic to arm movements)
+        # 2) apply additional force to get desired fx, r, p, y=0
+
+        # Rotor positions (TODO: visualize)
+        rotor_pos = np.zeros([3,4])
+        rotor_pos[:,0] = np.array([0.0276,0,-0.0482])
+        rotor_pos[:,1] = np.array([0.0276,0,0.0482])
+        rotor_pos[:,2] = np.array([-0.0276,0,-0.0482])
+        rotor_pos[:,3] = np.array([-0.0276,0,0.0482])
+
+        # set forces
+        rotor_forces = []
+        for i in range(rotor_pos.shape[1]):
+            force_drone_frame = SpatialForce(np.array([0,0,0]), np.array([0,0,-1]))
+            force_world = force_drone_frame # TODO: convert frames
+
+            extforce = ExternallyAppliedSpatialForce()
+            extforce.body_index = quadrotor_body
+            extforce.p_BoBq_B = rotor_pos[:,i]
+            extforce.F_Bq_W = force_world
+            rotor_forces.append(extforce)
+
+        output.set_value(rotor_forces)
+        return output
 
 '''
 Builds a trajectory from B-splines for the drone.
