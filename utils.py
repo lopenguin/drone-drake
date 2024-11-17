@@ -18,8 +18,7 @@ from pydrake.all import (
 )
 
 '''
-A differential flatness controller for the drone system.
-TODO: figure out what this actually does
+Converts a trajectory in xyz space to a set of poses the drone can follow.
 
 Adapted from GCS quadrotor examples:
 https://github.com/RobotLocomotion/gcs-science-robotics/blob/main/reproduction/uav/helpers.py
@@ -28,6 +27,7 @@ class FlatnessInverter(LeafSystem):
     def __init__(self, traj, animator, t_offset=0):
         LeafSystem.__init__(self)
         self.traj = traj
+        # output port: [xyz, rpy, v, omega]
         self.port = self.DeclareVectorOutputPort("state", 12, self.DoCalcState, {self.time_ticket()})
         self.t_offset = t_offset
         self.animator = animator
@@ -42,6 +42,7 @@ class FlatnessInverter(LeafSystem):
         fz = np.sqrt(q_ddot[0]**2 + q_ddot[1]**2 + (q_ddot[2] + 9.81)**2)
         r = np.arcsin(-q_ddot[1]/fz)
         p = np.arcsin(q_ddot[0]/fz)
+        # yaw doesn't really matter
 
         output.set_value(np.concatenate((q, [r, p, 0], q_dot, np.zeros(3))))
 
@@ -49,6 +50,24 @@ class FlatnessInverter(LeafSystem):
             frame = self.animator.frame(context.get_time())
             self.animator.SetProperty(frame, "/Cameras/default/rotated/<object>", "position", [-2.5, 4, 2.5])
             self.animator.SetTransform(frame, "/drake", RigidTransform(-q))
+
+
+class SimpleController(LeafSystem):
+    def __init__(self):
+        LeafSystem.__init__(self)
+
+        state_index = self.DeclareContinuousState(1)  # One state variable.
+        self.output_port = self.DeclareStateOutputPort("y", state_index)  # One output: y=x.
+        
+        self.goal = 1.
+
+    def DoCalcTimeDerivatives(self, context, derivatives):
+        x = context.get_continuous_state_vector().GetAtIndex(0)
+        if (x > 1.):
+            xdot = -0.1
+        else:
+            xdot = 0.1
+        derivatives.get_mutable_vector().SetAtIndex(0, xdot)
 
 
 '''
@@ -164,13 +183,14 @@ class Quadrotor(LeafSystem):
     def __init__(self, scene_graph, plant):
         LeafSystem.__init__(self)
         # create temporary plant to set everything up
-        # plant = MultibodyPlant(0.0)
-        # parser = Parser(plant, scene_graph)
-        # parser.package_map().PopulateFromFolder("aerial_grasping")
+        plant = MultibodyPlant(0.0)
+        parser = Parser(plant, scene_graph)
+        parser.package_map().PopulateFromFolder("aerial_grasping")
         # self.model_idxs = parser.AddModelsFromUrl("package://aerial_grasping/assets/skydio_2/quadrotor_arm.urdf")[0]
-        # plant.Finalize()
+        self.model_idxs = parser.AddModelsFromUrl("package://drake_models/skydio_2/quadrotor.urdf")[0]
+        plant.Finalize()
 
-        self.model_idxs = plant.GetModelInstanceByName("drone")
+        # self.model_idxs = plant.GetModelInstanceByName("drone")
 
         # connections
         self.DeclareVectorInputPort("quadrotor_state", 12)
@@ -194,9 +214,8 @@ class Quadrotor(LeafSystem):
     def OutputGeometryPose(self, context, output):
         pose_out = self.EvalAbstractInput(context, 0).get_value()
         position = np.array([pose_out[0], pose_out[1], pose_out[2]])
-        rotation = RotationMatrix()
+        rotation = RotationMatrix(RollPitchYaw(pose_out[3], pose_out[4], pose_out[5]))
         pose = RigidTransform(rotation, position)
-        print(pose)
         
         # set drone frame
         output.get_mutable_value().set_value(self.frame_id, pose)
@@ -211,8 +230,8 @@ class Quadrotor(LeafSystem):
         quadrotor = builder.AddSystem(Quadrotor(scene_graph, plant))
         # connect drone ports
         builder.Connect(state_port, quadrotor.get_input_port(0))
-        # builder.Connect(quadrotor.get_output_port(0), scene_graph.get_source_pose_port(quadrotor.source_id))
-        builder.Connect(quadrotor.get_output_port(0), plant.get_desired_state_input_port(quadrotor.model_idxs))
+        builder.Connect(quadrotor.get_output_port(0), scene_graph.get_source_pose_port(quadrotor.source_id))
+        # builder.Connect(quadrotor.get_output_port(0), plant.get_desired_state_input_port(quadrotor.model_idxs))
         # problem: not set up to control quadrotor ports
         # potential solution: add motors?
 
