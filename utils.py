@@ -17,6 +17,11 @@ from pydrake.all import (
     RotationMatrix,
     ExternallyAppliedSpatialForce,
     SpatialForce,
+    RigidTransform,
+    RotationMatrix,
+    Cylinder,
+    Rgba,
+    Meshcat,
 )
 
 '''
@@ -30,7 +35,7 @@ class FlatnessInverter(LeafSystem):
         LeafSystem.__init__(self)
         self.traj = traj
         # output port: [xyz, rpy, v, omega]
-        self.port = self.DeclareVectorOutputPort("state", 12, self.DoCalcState, {self.time_ticket()})
+        self.output_port = self.DeclareVectorOutputPort("state", 12, self.DoCalcState, {self.time_ticket()})
         self.t_offset = t_offset
         self.animator = animator
 
@@ -70,11 +75,17 @@ class SimpleController(LeafSystem):
 
 
 class DroneRotorController(LeafSystem):
-    def __init__(self, plant):
+    def __init__(self, plant, meshcat):
         LeafSystem.__init__(self)
 
         self.plant = plant
-        # self.DeclareVectorInputPort("yum", 12)
+        self.meshcat = meshcat
+        self.last_time = 0.0
+
+        # input/output ports
+        self.input_state_port = self.DeclareAbstractInputPort("drone_state_current",
+            AbstractValue.Make([RigidTransform()]))
+        self.input_state_d_port = self.DeclareVectorInputPort("drone_state_desired", 12)
         self.output_port = self.DeclareAbstractOutputPort("rotor_force",
             lambda: AbstractValue.Make([ExternallyAppliedSpatialForce()]), self.CalcRotorForces)
         
@@ -82,28 +93,46 @@ class DroneRotorController(LeafSystem):
         drone_instance = self.plant.GetModelInstanceByName("drone")
         quadrotor_body = self.plant.GetBodyIndices(drone_instance)[0]
 
-        # Plan:
-        # 1) apply forces at 4 rotors to compensate gravity (dynamic to arm movements)
-        # 2) apply additional force to get desired fx, r, p, y=0
+        # pull state and command from inputs
+        state = self.get_input_port(self.input_state_port.get_index()).Eval(context)
+        X_DW = state[int(quadrotor_body)]
+        state_d = self.get_input_port(self.input_state_d_port.get_index()).Eval(context)
+        X_DW_desired = RigidTransform(
+            RotationMatrix(RollPitchYaw(state_d[3], state_d[4], state_d[5])), 
+            np.array([state_d[0], state_d[1], state_d[2]]))
 
-        # Rotor positions (TODO: visualize)
+        # Rotor positions
         rotor_pos = np.zeros([3,4])
-        rotor_pos[:,0] = np.array([0.0276,0,-0.0482])
-        rotor_pos[:,1] = np.array([0.0276,0,0.0482])
-        rotor_pos[:,2] = np.array([-0.0276,0,-0.0482])
-        rotor_pos[:,3] = np.array([-0.0276,0,0.0482])
+        rotor_pos[:,0] = np.array([0.0676,-0.12,0.0])
+        rotor_pos[:,1] = np.array([0.0676, 0.12,0.0])
+        rotor_pos[:,2] = np.array([-0.1076,-0.11,0.0])
+        rotor_pos[:,3] = np.array([-0.1076,0.11,0.0])
+
+        # plot via meshcat
+        if (context.get_time() - self.last_time > 0.1):
+            X_R1D = RigidTransform(RotationMatrix(),rotor_pos[:,0])
+            X_R2D = RigidTransform(RotationMatrix(),rotor_pos[:,1])
+            X_R3D = RigidTransform(RotationMatrix(),rotor_pos[:,2])
+            X_R4D = RigidTransform(RotationMatrix(),rotor_pos[:,3])
+            plot_ref_frame(self.meshcat, f"rotor1_{context.get_time()}", X_DW @ X_R1D)
+            plot_ref_frame(self.meshcat, f"rotor2_{context.get_time()}", X_DW @ X_R2D)
+            plot_ref_frame(self.meshcat, f"rotor3_{context.get_time()}", X_DW @ X_R3D)
+            plot_ref_frame(self.meshcat, f"rotor4_{context.get_time()}", X_DW @ X_R4D)
+            self.last_time = 99999.
+
+        
 
         # set forces
         rotor_forces = []
-        for i in range(rotor_pos.shape[1]):
-            force_drone_frame = SpatialForce(np.array([0,0,0]), np.array([0,0,-1]))
-            force_world = force_drone_frame # TODO: convert frames
+        # for i in range(rotor_pos.shape[1]):
+        #     force_drone_frame = SpatialForce(np.array([0,0,0]), np.array([0,0,-1]))
+        #     force_world = force_drone_frame # TODO: convert frames
 
-            extforce = ExternallyAppliedSpatialForce()
-            extforce.body_index = quadrotor_body
-            extforce.p_BoBq_B = rotor_pos[:,i]
-            extforce.F_Bq_W = force_world
-            rotor_forces.append(extforce)
+        #     extforce = ExternallyAppliedSpatialForce()
+        #     extforce.body_index = quadrotor_body
+        #     extforce.p_BoBq_B = rotor_pos[:,i]
+        #     extforce.F_Bq_W = force_world
+        #     rotor_forces.append(extforce)
 
         output.set_value(rotor_forces)
         return output
@@ -274,3 +303,30 @@ class Quadrotor(LeafSystem):
         # potential solution: add motors?
 
         return quadrotor
+
+
+def plot_ref_frame(meshcat: Meshcat, path, X_PT, length=0.15, radius=0.005, opacity=1.0):
+    '''
+    Make reference frame on meshcat with name `path` at transform X_PT
+    Modified from:
+    https://github.com/RussTedrake/manipulation/blob/master/manipulation/meshcat_utils.py
+    '''
+    meshcat.SetTransform(path, X_PT)
+    # x-axis
+    X_TG = RigidTransform(RotationMatrix.MakeYRotation(np.pi / 2), [length / 2.0, 0, 0])
+    meshcat.SetTransform(path + "/x-axis", X_TG)
+    meshcat.SetObject(
+        path + "/x-axis", Cylinder(radius, length), Rgba(1, 0, 0, opacity)
+    )
+    # y-axis
+    X_TG = RigidTransform(RotationMatrix.MakeXRotation(np.pi / 2), [0, length / 2.0, 0])
+    meshcat.SetTransform(path + "/y-axis", X_TG)
+    meshcat.SetObject(
+        path + "/y-axis", Cylinder(radius, length), Rgba(0, 1, 0, opacity)
+    )
+    # z-axis
+    X_TG = RigidTransform([0, 0, length / 2.0])
+    meshcat.SetTransform(path + "/z-axis", X_TG)
+    meshcat.SetObject(
+        path + "/z-axis", Cylinder(radius, length), Rgba(0, 0, 1, opacity)
+    )

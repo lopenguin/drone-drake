@@ -25,15 +25,14 @@ def save_diagram(diagram):
     with open('diagram.svg','wb') as png_file:
         png_file.write(pngfile)
 
-# def plot_ref_frame(meshcat) (see 8 set 3 / https://github.com/RussTedrake/manipulation/blob/master/manipulation/meshcat_utils.py)
-
 if __name__ == '__main__':
     ## Basic drone trajectory
     # in poses
     start = np.array([-1.5,0,1.]).reshape([3,1])
     end = np.array([1.5,0,1.]).reshape([3,1])
     intermediate = np.array([0.,0,-1.5]).reshape([3,1])
-    trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+    # trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+    trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.2,1.3])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -79,7 +78,9 @@ if __name__ == '__main__':
     # builder.Connect(controller.output_port, plant.get_actuation_input_port(drone_instance))
 
     # simple controller for drone
-    drone_controller = builder.AddNamedSystem("drone controller", DroneRotorController(plant))
+    drone_controller = builder.AddNamedSystem("drone controller", DroneRotorController(plant, meshcat))
+    builder.Connect(plant.get_body_poses_output_port(), drone_controller.input_state_port)
+    builder.Connect(traj_system.output_port, drone_controller.input_state_d_port)
     builder.Connect(drone_controller.output_port, plant.get_applied_spatial_force_input_port())
 
     # Add visualizer and build

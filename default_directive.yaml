@@ -19,3 +19,4 @@ directives:
         default_free_body_pose:
             quadrotor_link:
                 translation: [0.25,0.,0.8]
+                rotation: !Rpy { deg: [60, 32, 103] }
