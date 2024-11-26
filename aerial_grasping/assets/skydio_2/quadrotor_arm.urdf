@@ -78,7 +78,7 @@
     </collision>
     <inertial>
       <origin rpy="0.0013490340912847287 -0.15433618253071657 0.0066354181456347305" xyz="-0.012372709810733795 -4.5211403630673885e-05 -0.02103196457028389"/>
-      <mass value="2.3364000000000003"/>
+      <mass value=".23364000000000003"/>
       <inertia ixx="0.009014303010689815" ixy="0.0" ixz="0.0" iyy="0.005835102417829581" iyz="0.0" izz="0.00778747846359954"/>
     </inertial>
   </link>
@@ -110,7 +110,7 @@
     </visual>
     <inertial>
       <origin rpy="0.009910032200701302 -0.5123007314267984 0.002209016500439809" xyz="2.4176391889341176e-05 2.4116111490002368e-06 -1.0059113265015185e-05"/>
-      <mass value="0.2596"/>
+      <mass value="0.02596"/>
       <inertia ixx="0.00020292766231464653" ixy="0.0" ixz="0.0" iyy="0.00017078637725384855" iyz="0.0" izz="0.00020384964230406682"/>
     </inertial>
   </link>
@@ -122,6 +122,16 @@
     <!-- <limit effort="1000" velocity="1000.00" lower="-0.52359877559829881565" upper="3.14159265358979311599"/> -->
     <limit effort="1000" velocity="1000.00" lower="-3.14159265358979311599" upper="0.52359877559829881565"/>
   </joint>
+  <transmission name="arm_sh1_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="arm_sh1">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="arm_sh1_motor">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
   
   <link name="arm_link_hr0">
     <visual>
@@ -177,7 +187,7 @@
     </collision>
     <inertial>
       <origin rpy="-0.004185887288594259 -0.6136269547775202 -0.0004619387581783485" xyz="0.0553741455078125 0.00023603376757819206 0.04827198013663292"/>
-      <mass value="0.725"/>
+      <mass value="0.0725"/>
       <inertia ixx="0.0008215365829160558" ixy="0.0" ixz="0.0" iyy="0.0020047889807066404" iyz="0.0" izz="0.0019722797759789395"/>
     </inertial>
   </link>
@@ -188,6 +198,16 @@
     <child link="arm_link_el0"/>
     <limit effort="1000" velocity="1000.00" lower="0" upper="3.14159265358979311599"/>
   </joint>
+  <transmission name="arm_el0_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="arm_el0">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="arm_el0_motor">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
 
   <link name="arm_link_el1">
     <visual>
@@ -221,7 +241,7 @@
     </collision>
     <inertial>
       <origin rpy="-0.15027374227250867 -0.0007874585461915551 0.003728225436950172" xyz="-0.1257835328578949 -0.013684478588402271 0.00010157923679798841"/>
-      <mass value="0.725"/>
+      <mass value="0.0725"/>
       <inertia ixx="0.0006254807525240598" ixy="0.0" ixz="0.0" iyy="0.004402454711936095" iyz="0.0" izz="0.004515915146038191"/>
     </inertial>
   </link>
@@ -232,6 +252,16 @@
     <child link="arm_link_el1"/>
     <limit effort="1000" velocity="1000.00" lower="-2.79252680319092716487" upper="2.79252680319092716487"/>
   </joint>
+  <transmission name="arm_el1_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="arm_el1">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="arm_el1_motor">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
 
   <link name="arm_link_wr0">
     <visual>
@@ -254,7 +284,7 @@
     </collision>
     <inertial>
       <origin rpy="-0.4951534907966386 0.0033720434077784134 0.020027599337697932" xyz="0.008210677653551102 -0.012051000259816647 3.143483627354726e-05"/>
-      <mass value="0.98"/>
+      <mass value="0.098"/>
       <inertia ixx="0.0009851320696685427" ixy="0.0" ixz="0.0" iyy="0.0008916145765810678" iyz="0.0" izz="0.0012354892751854467"/>
     </inertial>
   </link>
@@ -265,6 +295,16 @@
     <child link="arm_link_wr0"/>
     <limit effort="1000" velocity="1000.00" lower="-1.83259571459404613236" upper="1.83259571459404613236"/>
   </joint>
+  <transmission name="arm_wr0_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="arm_wr0">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="arm_wr0_motor">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
 
   <link name="arm_link_wr1">
     <visual>
@@ -287,7 +327,7 @@
     </collision>
     <inertial>
       <origin rpy="0.006393076449033863 0.2928526604761865 -0.022814984050994802" xyz="0.12516802549362183 0.00010137435310753062 -0.013997982256114483"/>
-      <mass value="0.785"/>
+      <mass value="0.0785"/>
       <inertia ixx="0.00076741362048185" ixy="0.0" ixz="0.0" iyy="0.0017628124054271809" iyz="0.0" izz="0.0016818105865345951"/>
     </inertial>
   </link>
@@ -298,6 +338,16 @@
     <child link="arm_link_wr1"/>
     <limit effort="1000" velocity="1000.00" lower="-2.87979326579064354163" upper="2.87979326579064354163"/>
   </joint>
+  <transmission name="arm_sh0_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="arm_wr1">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="arm_wr1_motor">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
   
   <link name="arm_link_fngr">
     <visual>
@@ -375,7 +425,7 @@
     </collision>
     <inertial>
       <origin rpy="0.0003416659657240473 0.3751670012784243 -0.004058661249495721" xyz="0.04787873849272728 -0.00020676758140325546 -0.01628788933157921"/>
-      <mass value="0.2"/>
+      <mass value="0.02"/>
       <inertia ixx="0.0001439963634171048" ixy="0.0" ixz="0.0" iyy="0.0003007126997998294" iyz="0.0" izz="0.0003912783268020657"/>
     </inertial>
   </link>
@@ -386,4 +436,14 @@
     <child link="arm_link_fngr"/>
     <limit effort="1000" velocity="1000.00" lower="-1.57" upper="0.0"/>
   </joint>
+  <transmission name="arm_f1x_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="arm_f1x">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="arm_f1x_motor">
+      <hardwareInterface>VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
 </robot>

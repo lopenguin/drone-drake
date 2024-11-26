@@ -30,9 +30,9 @@ if __name__ == '__main__':
     # in poses
     start = np.array([-1.5,0,1.]).reshape([3,1])
     end = np.array([1.5,0,1.]).reshape([3,1])
-    intermediate = np.array([0.,0,-1.5]).reshape([3,1])
-    # trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
-    trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.2,1.3])
+    intermediate = np.array([0.,0,-0.5]).reshape([3,1]) # TODO: -1.5
+    trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+    # trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.2,1.3])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -56,8 +56,8 @@ if __name__ == '__main__':
     models = ProcessModelDirectives(directives, plant, parser)
     ApplyMultibodyPlantConfig(plant_config, plant)
 
-    drone_instance = plant.GetModelInstanceByName("drone")
-    plant.set_gravity_enabled(drone_instance, False) # gravity compensation.
+    # drone_instance = plant.GetModelInstanceByName("drone")
+    # plant.set_gravity_enabled(drone_instance, False) # gravity compensation.
     plant.Finalize()
 
     # Add visualizer
@@ -70,16 +70,24 @@ if __name__ == '__main__':
 
     # simple controller for drone arm
     drone_instance = plant.GetModelInstanceByName("drone")
+    # TEMP: FIX THE ARM
+    # plant.GetJointByName("arm_sh0").set_position_limits([-0.],[0.])
+    # plant.GetJointByName("arm_sh1").set_position_limits([-0.],[0.])
+    # plant.GetJointByName("arm_el0").set_position_limits([-0.],[0.])
+    # plant.GetJointByName("arm_el1").set_position_limits([-0.],[0.])
+    # plant.GetJointByName("arm_wr0").set_position_limits([-0.],[0.])
+    # plant.GetJointByName("arm_wr1").set_position_limits([-0.],[0.])
+    # plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
     # plant.GetJointByName("arm_sh0").set_position_limits(
     #         [-np.inf], [np.inf]
     #     )
-    # # TODO: add motors to URDF
-    # controller = builder.AddNamedSystem("controller", SimpleController())
+    # controller = builder.AddNamedSystem("arm_controller", SimpleController())
     # builder.Connect(controller.output_port, plant.get_actuation_input_port(drone_instance))
 
     # simple controller for drone
     drone_controller = builder.AddNamedSystem("drone controller", DroneRotorController(plant, meshcat))
-    builder.Connect(plant.get_body_poses_output_port(), drone_controller.input_state_port)
+    builder.Connect(plant.get_body_poses_output_port(), drone_controller.input_poses_port)
+    builder.Connect(plant.get_body_spatial_velocities_output_port(), drone_controller.input_vels_port)
     builder.Connect(traj_system.output_port, drone_controller.input_state_d_port)
     builder.Connect(drone_controller.output_port, plant.get_applied_spatial_force_input_port())
 
