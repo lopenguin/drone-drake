@@ -68,29 +68,11 @@ class FlatnessInverter(LeafSystem):
             self.animator.SetTransform(frame, "/drake", RigidTransform(-q))
 
 
-class SimpleController(LeafSystem):
-    def __init__(self):
-        LeafSystem.__init__(self)
-
-        # TODO: this seems to be broken..
-        state_index = self.DeclareContinuousState(7)  # One state variable.
-        self.output_port = self.DeclareStateOutputPort("y", state_index)  # One output: y=x.
-        
-        self.goal = 1.
-
-    def DoCalcTimeDerivatives(self, context, derivatives):
-        x = context.get_continuous_state_vector() # 7 vector
-        print(x)
-        xdot = np.zeros(7)
-        # derivatives.get_mutable_vector().SetAtIndex(0, xdot)
-        derivatives.get_mutable_vector().SetFromVector(xdot)
-
-
 class DroneRotorController(LeafSystem):
-    def __init__(self, plant, meshcat):
+    def __init__(self, plant: MultibodyPlant, meshcat):
         LeafSystem.__init__(self)
 
-        self.plant: MultibodyPlant = plant
+        self.plant = plant
         self.meshcat = meshcat
         self.last_time = 0.0
 
@@ -216,6 +198,64 @@ class DroneRotorController(LeafSystem):
 
         output.set_value(rotor_forces)
         return output
+    
+
+# accepts joint commands
+class JointController(LeafSystem):
+    def __init__(self):
+        LeafSystem.__init__(self)
+
+        # inputs/outputs
+        # drone quat, drone xyz, q, quatdot, xyzdot, qdot?
+        self.input_state_port = self.DeclareVectorInputPort("cur_state", 27)
+        # self.input_cmd_port = self.DeclareVectorInputPort("q_des", 7)
+        # we only control velocity
+        state_index = self.DeclareContinuousState(7)
+        self.output_port = self.DeclareStateOutputPort("qd_cmd", state_index)
+        
+        self.q_des = np.array([0., -1.16, 1.18, 1.37, 0, 0, -1.57])
+
+    def DoCalcTimeDerivatives(self, context, derivatives):
+        state = self.input_state_port.Eval(context)
+        q_cur = state[7:14]
+        qdot_cur = state[-7:]
+
+        # PI control
+        qdot = 1000*(self.q_des - q_cur) + 100.*(0 - qdot_cur)
+        print(q_cur)
+        derivatives.get_mutable_vector().SetFromVector(qdot)
+
+
+class ArmTrajectory(LeafSystem):
+    def __init__(self, q_final, duration, plant: MultibodyPlant):
+        LeafSystem.__init__(self)
+
+        self.q_final = q_final
+        self.duration = duration
+
+        # input: current state
+        self.input_state_port = self.DeclareVectorInputPort("cur_state", 27)
+
+        # build trajectory
+        context = plant.CreateDefaultContext()
+        state = self.input_state_port.Eval(context)
+        start = state[7:14].reshape([7,1])
+        end = q_final.reshape([7,1])
+        traj = make_bspline(start, end, None,
+            [context.get_time(),context.get_time() + 1e-3,context.get_time() + duration])
+        self.traj = traj
+
+        # output joint port: [q_cmd, qd_cmd, qdd_cmd]
+        self.output_joint_port = self.DeclareVectorOutputPort("arm_des", 21, self.CalcJointState, {self.time_ticket()})
+
+    def CalcJointState(self, context, output):
+        t = context.get_time() - 1e-4
+
+        q = np.squeeze(self.traj.value(t))
+        q_dot = np.squeeze(self.traj.EvalDerivative(t))
+        q_ddot = np.squeeze(self.traj.EvalDerivative(t, 2))
+
+        output.set_value(np.concatenate((q, q_dot, q_ddot)))
 
 '''
 Builds a trajectory from B-splines for the drone.
@@ -317,72 +357,6 @@ def make_bspline(start, end, intermediate, times, order=8):
     time_traj = BsplineTrajectory(BsplineBasis(order, knots), time_control_points) # list of 1 x 1 array
     trajectory = BezierTrajectory(path, time_traj)
     return trajectory
-
-
-
-'''
-Quadrotor connection class
-
-Adapted from Drake examples:
-https://github.com/RobotLocomotion/drake/blob/master/examples/quadrotor/quadrotor_geometry.cc
-'''
-class Quadrotor(LeafSystem):
-    def __init__(self, scene_graph, plant):
-        LeafSystem.__init__(self)
-        # create temporary plant to set everything up
-        plant = MultibodyPlant(0.0)
-        parser = Parser(plant, scene_graph)
-        parser.package_map().PopulateFromFolder("aerial_grasping")
-        # self.model_idxs = parser.AddModelsFromUrl("package://aerial_grasping/assets/skydio_2/quadrotor_arm.urdf")[0]
-        self.model_idxs = parser.AddModelsFromUrl("package://drake_models/skydio_2/quadrotor.urdf")[0]
-        plant.Finalize()
-
-        # self.model_idxs = plant.GetModelInstanceByName("drone")
-
-        # connections
-        self.DeclareVectorInputPort("quadrotor_state", 12)
-        self.DeclareAbstractOutputPort("quadrotor_pose",
-            lambda: AbstractValue.Make(FramePoseVector()), self.OutputGeometryPose)
-
-        # save frame
-        body_idxs = plant.GetBodyIndices(self.model_idxs)
-        drone_body_idx = body_idxs[0]
-        self.source_id = plant.get_source_id()
-        self.frame_id = plant.GetBodyFrameIdOrThrow(drone_body_idx)
-        self.arm_frames = []
-        for idx in body_idxs:
-            if idx == drone_body_idx:
-                continue
-            self.arm_frames.append(plant.GetBodyFrameIdOrThrow(idx))
-
-    def get_frame_id(self):
-        return self.frame_id
-    
-    def OutputGeometryPose(self, context, output):
-        pose_out = self.EvalAbstractInput(context, 0).get_value()
-        position = np.array([pose_out[0], pose_out[1], pose_out[2]])
-        rotation = RotationMatrix(RollPitchYaw(pose_out[3], pose_out[4], pose_out[5]))
-        pose = RigidTransform(rotation, position)
-        
-        # set drone frame
-        output.get_mutable_value().set_value(self.frame_id, pose)
-
-        # set arm frame
-        for frame in self.arm_frames:
-            output.get_mutable_value().set_value(frame, RigidTransform())
-        return output
-
-    @staticmethod
-    def AddToBuilder(builder, state_port, scene_graph, plant):
-        quadrotor = builder.AddSystem(Quadrotor(scene_graph, plant))
-        # connect drone ports
-        builder.Connect(state_port, quadrotor.get_input_port(0))
-        builder.Connect(quadrotor.get_output_port(0), scene_graph.get_source_pose_port(quadrotor.source_id))
-        # builder.Connect(quadrotor.get_output_port(0), plant.get_desired_state_input_port(quadrotor.model_idxs))
-        # problem: not set up to control quadrotor ports
-        # potential solution: add motors?
-
-        return quadrotor
 
 
 def plot_ref_frame(meshcat: Meshcat, path, X_PT, length=0.15, radius=0.005, opacity=1.0):

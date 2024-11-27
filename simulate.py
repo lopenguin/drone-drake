@@ -5,7 +5,7 @@ Simulate the drone and its environment.
 import numpy as np
 
 from pydrake.geometry import StartMeshcat
-from pydrake.multibody.plant import AddMultibodyPlantSceneGraph, ApplyMultibodyPlantConfig, MultibodyPlantConfig
+from pydrake.multibody.plant import AddMultibodyPlantSceneGraph, ApplyMultibodyPlantConfig, MultibodyPlantConfig, MultibodyPlant
 from pydrake.multibody.parsing import Parser
 from pydrake.all import (
     DiagramBuilder,
@@ -15,7 +15,7 @@ from pydrake.all import (
     Simulator,
 )
 
-from utils import FlatnessInverter, make_bspline, SimpleController, DroneRotorController
+from utils import FlatnessInverter, make_bspline, JointController, DroneRotorController, ArmTrajectory
 
 import pydot
 def save_diagram(diagram):
@@ -28,11 +28,15 @@ def save_diagram(diagram):
 if __name__ == '__main__':
     ## Basic drone trajectory
     # in poses
-    start = np.array([-1.5,0,1.]).reshape([3,1])
-    end = np.array([1.5,0,1.]).reshape([3,1])
-    intermediate = np.array([0.,0,-0.5]).reshape([3,1]) # TODO: -1.5
+    # start = np.array([-1.5,0,1.]).reshape([3,1])
+    # end = np.array([1.5,0,1.]).reshape([3,1])
+    # intermediate = np.array([0.,0,-0.5]).reshape([3,1])
+    # trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+
+    start = np.array([0,0,1.]).reshape([3,1])
+    end = np.array([0,0,1.]).reshape([3,1])
+    intermediate = np.array([0.,0,1]).reshape([3,1])
     trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
-    # trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.2,1.3])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -78,11 +82,15 @@ if __name__ == '__main__':
     # plant.GetJointByName("arm_wr0").set_position_limits([-0.],[0.])
     # plant.GetJointByName("arm_wr1").set_position_limits([-0.],[0.])
     # plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
-    # plant.GetJointByName("arm_sh0").set_position_limits(
+    # plant.GetJointByName("arm_sh1").set_position_limits(
     #         [-np.inf], [np.inf]
     #     )
-    # controller = builder.AddNamedSystem("arm_controller", SimpleController())
-    # builder.Connect(controller.output_port, plant.get_actuation_input_port(drone_instance))
+    q_desired = np.array([0., -1.16, 1.18, 1.37, 0, 0, -1.57])
+    drone_traj = ArmTrajectory(q_desired, 1., plant)
+
+    controller = builder.AddNamedSystem("arm_controller", JointController())
+    builder.Connect(plant.get_state_output_port(drone_instance), controller.input_state_port)
+    builder.Connect(controller.output_port, plant.get_actuation_input_port(drone_instance))
 
     # simple controller for drone
     drone_controller = builder.AddNamedSystem("drone controller", DroneRotorController(plant, meshcat))
