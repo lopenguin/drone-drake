@@ -14,6 +14,9 @@ from pydrake.all import (
     ExternallyAppliedSpatialForce,
     SpatialForce,
     SpatialVelocity,
+    JacobianWrtVariable,
+    MathematicalProgram,
+    SnoptSolver,
 )
 
 import utils
@@ -30,12 +33,12 @@ class DroneRotorController(LeafSystem):
         self.last_time = 0.0
 
         # input/output ports
-        self.input_poses_port = self.DeclareAbstractInputPort("drone_pose_current",
+        self.input_poses_port = self.DeclareAbstractInputPort("drone.pose_cur",
             AbstractValue.Make([RigidTransform()]))
-        self.input_vels_port = self.DeclareAbstractInputPort("drone_vel_current",
+        self.input_vels_port = self.DeclareAbstractInputPort("drone.vel_cur",
             AbstractValue.Make([SpatialVelocity()]))
-        self.input_state_d_port = self.DeclareVectorInputPort("drone_state_desired", 15)
-        self.output_port = self.DeclareAbstractOutputPort("rotor_force",
+        self.input_state_d_port = self.DeclareVectorInputPort("drone.state_des", 15)
+        self.output_port = self.DeclareAbstractOutputPort("drone.rotor_force",
             lambda: AbstractValue.Make([ExternallyAppliedSpatialForce()]), self.CalcRotorForces)
         
         # make a context for the controller
@@ -74,10 +77,10 @@ class DroneRotorController(LeafSystem):
         #     X_R2D = RigidTransform(RotationMatrix(),rotor_pos[:,1])
         #     X_R3D = RigidTransform(RotationMatrix(),rotor_pos[:,2])
         #     X_R4D = RigidTransform(RotationMatrix(),rotor_pos[:,3])
-        #     plot_ref_frame(self.meshcat, f"rotor1_{context.get_time()}", X_DW @ X_R1D)
-        #     plot_ref_frame(self.meshcat, f"rotor2_{context.get_time()}", X_DW @ X_R2D)
-        #     plot_ref_frame(self.meshcat, f"rotor3_{context.get_time()}", X_DW @ X_R3D)
-        #     plot_ref_frame(self.meshcat, f"rotor4_{context.get_time()}", X_DW @ X_R4D)
+        #     utils.plot_ref_frame(self.meshcat, f"rotor1_{context.get_time()}", X_DW @ X_R1D)
+        #     utils.plot_ref_frame(self.meshcat, f"rotor2_{context.get_time()}", X_DW @ X_R2D)
+        #     utils.plot_ref_frame(self.meshcat, f"rotor3_{context.get_time()}", X_DW @ X_R3D)
+        #     utils.plot_ref_frame(self.meshcat, f"rotor4_{context.get_time()}", X_DW @ X_R4D)
         #     self.last_time = 99999.
 
         # plot trajectory via meshcat
@@ -157,12 +160,12 @@ class JointController(LeafSystem):
         LeafSystem.__init__(self)
 
         # inputs/outputs
-        # drone quat, drone xyz, q, quatdot, xyzdot, qdot?
-        self.input_state_port = self.DeclareVectorInputPort("cur_state", 27)
-        self.input_state_d_port = self.DeclareVectorInputPort("q_des", 21)
+        # drone quat, drone xyz, q, quatdot, xyzdot, qdot
+        self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 27)
+        self.input_state_d_port = self.DeclareVectorInputPort("arm.state_des", 21) # q, qdot, qddot
         # we only control velocity
         state_index = self.DeclareContinuousState(7)
-        self.output_port = self.DeclareStateOutputPort("qd_cmd", state_index)
+        self.output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_index)
 
     def DoCalcTimeDerivatives(self, context, derivatives):
         # current state
@@ -179,3 +182,90 @@ class JointController(LeafSystem):
         # PI control
         qdot = 1000*(q_d - q_cur) + 1000.*(qdot_d - qdot_cur)
         derivatives.get_mutable_vector().SetFromVector(qdot)
+
+"""
+Task space command controller for the arm (commands in drone frame)
+"""
+class TaskWrapper(LeafSystem):
+    def __init__(self, plant: MultibodyPlant):
+        LeafSystem.__init__(self)
+
+        self.plant = plant
+        self.plant_context = plant.CreateDefaultContext()
+        self.drone_model = plant.GetModelInstanceByName("drone")
+        # TODO: check these frames
+        self.end_effector_frame = plant.GetBodyByName("arm_link_fngr").body_frame()
+        self.drone_frame = plant.GetBodyByName("quadrotor_link").body_frame()
+
+        # inputs: current state and pose command
+        # drone quat, drone xyz, q, quatdot, xyzdot, qdot
+        self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 27)
+        # pose command (TODO)
+        self.input_state_d_port = self.DeclareVectorInputPort("arm.vel_des", 6)
+
+        # output: joint position, velocity, acceleration command
+        state_index = self.DeclareContinuousState(7)
+        self.output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_index)
+
+    def DoCalcTimeDerivatives(self, context, derivatives):
+        ## current state
+        state = self.input_state_port.Eval(context)
+        q_cur = state[7:14]
+        qdot_cur = state[-7:]
+
+        # forward kinematics
+        self.plant.SetPositions(self.plant_context, self.drone_model, state[:14])
+        # compute jacobian
+        J = self.plant.CalcJacobianSpatialVelocity(self.plant_context, JacobianWrtVariable.kQDot,
+            self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
+        J = J[:,7:13] # remove gripper
+        # compute pose
+        pose_cur = self.plant.CalcRelativeTransform(self.plant_context, self.drone_frame, self.end_effector_frame)
+
+        ## desired state
+        # pose_d = self.input_state_d_port.Eval(context)
+        pose_d = RigidTransform(RotationMatrix(), np.array([0,0.5,0]))
+        twist_d = np.zeros([6]) # [w, v]
+
+        ## Compute command
+        # error terms
+        ep = pose_d.translation() - pose_cur.translation()
+        print(ep)
+        Rd = pose_d.rotation().matrix()
+        R = pose_cur.rotation().matrix()
+        eR = 0.5*utils.skew_to_vec(Rd.T @ R - R.T @ Rd)
+
+        # desired velocity
+        state_d = twist_d + 10.*np.concatenate([eR, ep])
+
+        # IK
+        qdot_cmd = self.DiffIK(J, state_d, q_cur, qdot_cur, pose_cur.translation())
+        # add in gripper
+        qdot_cmd = np.concatenate([qdot_cmd, np.array([0.0])])
+
+        # send command
+        derivatives.get_mutable_vector().SetFromVector(qdot_cmd)
+
+    def DiffIK(self, J, state_d, q_cur, v_cur, p_cur):
+        # prog = MathematicalProgram()
+        # v = prog.NewContinuousVariables(7, "v")
+        # v_max = 3.0 # TODO: reconsider?
+
+        # # Add cost and constraints to prog here.
+        # prog.AddCost((J @ v - state_d).T @ (J @ v - state_d))
+        # prog.AddBoundingBoxConstraint(-v_max, v_max, v)
+
+        # solver = SnoptSolver()
+        # result = solver.Solve(prog)
+
+        # if not (result.is_success()):
+        #     raise ValueError("Could not find the optimal solution.")
+
+        # v_solution = result.GetSolution(v)
+
+        Jp = J[-3:, :]
+        J_inv = Jp.T @ np.linalg.inv(Jp @ Jp.T + 0.05*0.05*np.eye(3));
+
+        v_solution = J_inv.dot(state_d[-3:])
+
+        return v_solution

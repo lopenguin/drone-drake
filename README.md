@@ -22,7 +22,7 @@ python visualize.py
 ## Structure
 TODO: put in diagram.
 
-We split the drone and arm into two pieces which are effectively controlled independently. Each piece is composed of a *controller* and *trajectory generator*. In the case of the drone:
+We split the drone and arm into two pieces which are effectively controlled independently. Each piece is composed of a *controller* and *trajectory generator*, which are separated in files [Control.py](Control.py) and [Traj.py](Traj.py). In the case of the drone:
 
 `DroneRotorController` is the low-level controller. It implements a geometric controller based on [this paper](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=5717652) which essentially cancels the drone dynamics and uses proportional gains of position, velocity, rotation, and angular velocity to achieve a desired trajectory. Actuation is force commands.
 

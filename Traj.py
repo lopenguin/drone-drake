@@ -23,7 +23,7 @@ class FlatnessInverter(LeafSystem):
         LeafSystem.__init__(self)
         self.traj = traj
         # output port: [xyz, rpy, v, omega]
-        self.output_port = self.DeclareVectorOutputPort("state", 15, self.DoCalcState, {self.time_ticket()})
+        self.output_port = self.DeclareVectorOutputPort("drone.state_des", 15, self.DoCalcState, {self.time_ticket()})
         self.t_offset = t_offset
         self.animator = animator
 
@@ -63,14 +63,14 @@ class ArmTrajectory(LeafSystem):
         self.end = end
 
         # input: current state
-        self.input_state_port = self.DeclareVectorInputPort("cur_state", 27)
+        self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 27)
 
         # build trajectory
         self.traj_idx = 0
         self.traj = None
 
         # output joint port: [q_cmd, qd_cmd, qdd_cmd]
-        self.output_joint_port = self.DeclareVectorOutputPort("arm_des", 21, self.CalcJointState, {self.time_ticket()})
+        self.output_joint_port = self.DeclareVectorOutputPort("arm.state_des", 21, self.CalcJointState, {self.time_ticket()})
 
     def CalcJointState(self, context, output):
         t = context.get_time() - 1e-4
