@@ -231,16 +231,18 @@ class JointController(LeafSystem):
 
 
 class ArmTrajectory(LeafSystem):
-    def __init__(self, q_final, duration, plant: MultibodyPlant):
+    def __init__(self, q_final, start, end):
         LeafSystem.__init__(self)
 
         self.q_final = q_final
-        self.duration = duration
+        self.start = start
+        self.end = end
 
         # input: current state
         self.input_state_port = self.DeclareVectorInputPort("cur_state", 27)
 
         # build trajectory
+        self.traj_idx = 0
         self.traj = None
 
         # output joint port: [q_cmd, qd_cmd, qdd_cmd]
@@ -249,17 +251,25 @@ class ArmTrajectory(LeafSystem):
     def CalcJointState(self, context, output):
         t = context.get_time() - 1e-4
         if self.traj == None:
-            state = self.input_state_port.Eval(context)
-            start = state[7:14].reshape([7,1])
-            end = self.q_final.reshape([7,1])
-            self.traj = make_bspline(start, end, (start+end)/2.,
-                [t,t + 1e-3,t + self.duration/2.,t + self.duration])
+            self.createNewTraj(context)
+
+        if t > self.traj.end_time():
+            self.traj_idx += 1
+            if (self.traj_idx < len(self.q_final)):
+                self.createNewTraj(context)
 
         q = np.squeeze(self.traj.value(t))
         q_dot = np.squeeze(self.traj.EvalDerivative(t))
         q_ddot = np.squeeze(self.traj.EvalDerivative(t, 2))
 
         output.set_value(np.concatenate((q, q_dot, q_ddot)))
+
+    def createNewTraj(self, context):
+        state = self.input_state_port.Eval(context)
+        start = state[7:14].reshape([7,1])
+        end = self.q_final[self.traj_idx].reshape([7,1])
+        self.traj = make_bspline(start, end, (start+end)/2.,
+            [self.start[self.traj_idx],self.start[self.traj_idx] + 1e-3, (self.start[self.traj_idx] + self.end[self.traj_idx])/2., self.end[self.traj_idx]])
 
 '''
 Builds a trajectory from B-splines for the drone.

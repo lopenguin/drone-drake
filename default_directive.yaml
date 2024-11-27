@@ -10,7 +10,7 @@ directives:
         file: package://aerial_grasping/assets/sugar_box.sdf
         default_free_body_pose:
             base_link_sugar:
-                translation: [0, 0, 0.3]
+                translation: [0, 0.01, 0.3]
                 rotation: !Rpy { deg: [90, 180, 180] }
 
     - add_model:
@@ -19,6 +19,6 @@ directives:
         default_free_body_pose:
             quadrotor_link:
                 # translation: [0.25,0.,0.8]
-                # translation: [-1.5,0,1.]
-                translation: [0,0,1.]
+                translation: [-1.5,0,1.]
+                # translation: [0,0,1.]
                 rotation: !Rpy { deg: [0, 0, 0] }

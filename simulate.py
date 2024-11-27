@@ -28,15 +28,15 @@ def save_diagram(diagram):
 if __name__ == '__main__':
     ## Basic drone trajectory
     # in poses
-    # start = np.array([-1.5,0,1.]).reshape([3,1])
-    # end = np.array([1.5,0,1.]).reshape([3,1])
-    # intermediate = np.array([0.,0,-0.5]).reshape([3,1])
-    # trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
-
-    start = np.array([0,0,1.]).reshape([3,1])
-    end = np.array([0,0,1.]).reshape([3,1])
-    intermediate = np.array([0.,0,1]).reshape([3,1])
+    start = np.array([-1.5,0,1.]).reshape([3,1])
+    end = np.array([1.5,0,1.]).reshape([3,1])
+    intermediate = np.array([0.,0,-0.5]).reshape([3,1])
     trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+
+    # start = np.array([0,0,1.]).reshape([3,1])
+    # end = np.array([0,0,1.]).reshape([3,1])
+    # intermediate = np.array([0.,0,1]).reshape([3,1])
+    # trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -47,7 +47,7 @@ if __name__ == '__main__':
     model_directive_file = "default_directive.yaml"
     plant_config = MultibodyPlantConfig(
         time_step = sim_time_step,
-        contact_model = "point", # TODO: switch to hydroelastic once drone is fixed
+        contact_model = "point", # TODO: switch to hydroelastic (much slower)
         discrete_contact_approximation = "sap"
     )
 
@@ -72,7 +72,7 @@ if __name__ == '__main__':
     # Drone position -> poses
     traj_system = builder.AddSystem(FlatnessInverter(trajectory, animator))
 
-    # simple controller for drone arm
+    # Predefine trajectory for drone arm
     drone_instance = plant.GetModelInstanceByName("drone")
     # TEMP: FIX THE ARM
     # plant.GetJointByName("arm_sh0").set_position_limits([-0.],[0.])
@@ -85,10 +85,12 @@ if __name__ == '__main__':
     # plant.GetJointByName("arm_sh1").set_position_limits(
     #         [-np.inf], [np.inf]
     #     )
-    q_desired = np.array([0., -1.16, 1.18, 1.37, 0, 0, -0.72])
-    drone_traj = builder.AddSystem(ArmTrajectory(q_desired, 1., plant))
+    q_desired = np.array([0., -1.16, 1.18, 1.37, 0, 0, -0.92])
+    q_closed = np.array([0., -1.16, 1.18, 1.37, 0, 0, -0.5])
+    drone_traj = builder.AddSystem(ArmTrajectory([q_desired,q_closed], [0., 3.4], [1., 3.6]))
     builder.Connect(plant.get_state_output_port(drone_instance), drone_traj.input_state_port)
 
+    # simple controller for drone arm
     arm_controller = builder.AddNamedSystem("arm_controller", JointController())
     builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.input_state_port)
     builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
@@ -112,3 +114,18 @@ if __name__ == '__main__':
 
     simulator.AdvanceTo(end_time+0.05)
     meshcat_vis.PublishRecording()
+
+# Current state:
+# - Predefined drone trajectory & arm trajectory
+# - Joint commands for arm
+
+# Vision:
+# a) DRONE TRAJECTORY: given the position (and orientation?) of a box, 
+#       drone plans a trajectory to approach just above.
+#   - low priority for now
+# b) ARM TRAJECTORY: given the drone trajectory and a desired grasp time,
+#       plan to match position and velocity, and close gripper.
+#   - inverse kinematics for position/velocity commands
+#   - compute object position/velocity in (moving) drone frame
+#   - first, assume drone perfectly tracks trajectory
+#   - migrate to dynamically redoing trajectory based on current drone pose
