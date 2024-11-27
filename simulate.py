@@ -15,7 +15,9 @@ from pydrake.all import (
     Simulator,
 )
 
-from utils import FlatnessInverter, make_bspline, JointController, DroneRotorController, ArmTrajectory
+from utils import make_bspline
+import Control
+import Traj
 
 import pydot
 def save_diagram(diagram):
@@ -70,7 +72,7 @@ if __name__ == '__main__':
     animator = None # stop auto-tracking of drone movement
 
     # Drone position -> poses
-    traj_system = builder.AddSystem(FlatnessInverter(trajectory, animator))
+    traj_system = builder.AddSystem(Traj.FlatnessInverter(trajectory, animator))
 
     # Predefine trajectory for drone arm
     drone_instance = plant.GetModelInstanceByName("drone")
@@ -87,17 +89,17 @@ if __name__ == '__main__':
     #     )
     q_desired = np.array([0., -1.16, 1.18, 1.37, 0, 0, -0.92])
     q_closed = np.array([0., -1.16, 1.18, 1.37, 0, 0, -0.5])
-    drone_traj = builder.AddSystem(ArmTrajectory([q_desired,q_closed], [0., 3.4], [1., 3.6]))
+    drone_traj = builder.AddSystem(Traj.ArmTrajectory([q_desired,q_closed], [0., 3.4], [1., 3.6]))
     builder.Connect(plant.get_state_output_port(drone_instance), drone_traj.input_state_port)
 
     # simple controller for drone arm
-    arm_controller = builder.AddNamedSystem("arm_controller", JointController())
+    arm_controller = builder.AddNamedSystem("arm_controller", Control.JointController())
     builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.input_state_port)
     builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
     builder.Connect(drone_traj.output_joint_port, arm_controller.input_state_d_port)
 
     # simple controller for drone
-    drone_controller = builder.AddNamedSystem("drone controller", DroneRotorController(plant, meshcat))
+    drone_controller = builder.AddNamedSystem("drone controller", Control.DroneRotorController(plant, meshcat))
     builder.Connect(plant.get_body_poses_output_port(), drone_controller.input_poses_port)
     builder.Connect(plant.get_body_spatial_velocities_output_port(), drone_controller.input_vels_port)
     builder.Connect(traj_system.output_port, drone_controller.input_state_d_port)
