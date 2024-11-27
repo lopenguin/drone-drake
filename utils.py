@@ -208,21 +208,25 @@ class JointController(LeafSystem):
         # inputs/outputs
         # drone quat, drone xyz, q, quatdot, xyzdot, qdot?
         self.input_state_port = self.DeclareVectorInputPort("cur_state", 27)
-        # self.input_cmd_port = self.DeclareVectorInputPort("q_des", 7)
+        self.input_state_d_port = self.DeclareVectorInputPort("q_des", 21)
         # we only control velocity
         state_index = self.DeclareContinuousState(7)
         self.output_port = self.DeclareStateOutputPort("qd_cmd", state_index)
-        
-        self.q_des = np.array([0., -1.16, 1.18, 1.37, 0, 0, -1.57])
 
     def DoCalcTimeDerivatives(self, context, derivatives):
+        # current state
         state = self.input_state_port.Eval(context)
         q_cur = state[7:14]
         qdot_cur = state[-7:]
 
+        # desired state
+        state_d = self.input_state_d_port.Eval(context)
+        q_d = state_d[:7]
+        qdot_d = state_d[7:14]
+        qddot_d = state_d[-7:]
+
         # PI control
-        qdot = 1000*(self.q_des - q_cur) + 100.*(0 - qdot_cur)
-        print(q_cur)
+        qdot = 1000*(q_d - q_cur) + 1000.*(qdot_d - qdot_cur)
         derivatives.get_mutable_vector().SetFromVector(qdot)
 
 
@@ -237,19 +241,19 @@ class ArmTrajectory(LeafSystem):
         self.input_state_port = self.DeclareVectorInputPort("cur_state", 27)
 
         # build trajectory
-        context = plant.CreateDefaultContext()
-        state = self.input_state_port.Eval(context)
-        start = state[7:14].reshape([7,1])
-        end = q_final.reshape([7,1])
-        traj = make_bspline(start, end, None,
-            [context.get_time(),context.get_time() + 1e-3,context.get_time() + duration])
-        self.traj = traj
+        self.traj = None
 
         # output joint port: [q_cmd, qd_cmd, qdd_cmd]
         self.output_joint_port = self.DeclareVectorOutputPort("arm_des", 21, self.CalcJointState, {self.time_ticket()})
 
     def CalcJointState(self, context, output):
         t = context.get_time() - 1e-4
+        if self.traj == None:
+            state = self.input_state_port.Eval(context)
+            start = state[7:14].reshape([7,1])
+            end = self.q_final.reshape([7,1])
+            self.traj = make_bspline(start, end, (start+end)/2.,
+                [t,t + 1e-3,t + self.duration/2.,t + self.duration])
 
         q = np.squeeze(self.traj.value(t))
         q_dot = np.squeeze(self.traj.EvalDerivative(t))
@@ -332,6 +336,7 @@ Good reference: https://www.cl.cam.ac.uk/teaching/1999/AGraphHCI/SMAG/node4.html
 '''
 def make_bspline(start, end, intermediate, times, order=8):
     n = intermediate.shape[1]
+    dim = start.shape[0]
     num_control_points = order + n
     knots = np.zeros([order + num_control_points])
     # open uniform knots: repeat `order` times at start and end
@@ -340,7 +345,7 @@ def make_bspline(start, end, intermediate, times, order=8):
 
     # start and end
     oo2 = int(order/2)
-    path_control_points = np.zeros([3,num_control_points])
+    path_control_points = np.zeros([dim,num_control_points])
     path_control_points[:,:oo2] = start
     path_control_points[:,-oo2:] = end
     time_control_points = np.zeros([1,num_control_points])

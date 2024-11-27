@@ -85,12 +85,14 @@ if __name__ == '__main__':
     # plant.GetJointByName("arm_sh1").set_position_limits(
     #         [-np.inf], [np.inf]
     #     )
-    q_desired = np.array([0., -1.16, 1.18, 1.37, 0, 0, -1.57])
-    drone_traj = ArmTrajectory(q_desired, 1., plant)
+    q_desired = np.array([0., -1.16, 1.18, 1.37, 0, 0, -0.72])
+    drone_traj = builder.AddSystem(ArmTrajectory(q_desired, 1., plant))
+    builder.Connect(plant.get_state_output_port(drone_instance), drone_traj.input_state_port)
 
-    controller = builder.AddNamedSystem("arm_controller", JointController())
-    builder.Connect(plant.get_state_output_port(drone_instance), controller.input_state_port)
-    builder.Connect(controller.output_port, plant.get_actuation_input_port(drone_instance))
+    arm_controller = builder.AddNamedSystem("arm_controller", JointController())
+    builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.input_state_port)
+    builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
+    builder.Connect(drone_traj.output_joint_port, arm_controller.input_state_d_port)
 
     # simple controller for drone
     drone_controller = builder.AddNamedSystem("drone controller", DroneRotorController(plant, meshcat))
