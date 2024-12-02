@@ -25,11 +25,12 @@ import utils
 Geometric controller for the drone.
 """
 class DroneRotorController(LeafSystem):
-    def __init__(self, plant: MultibodyPlant, meshcat):
+    def __init__(self, plant: MultibodyPlant, meshcat, plot_traj=True):
         LeafSystem.__init__(self)
 
         self.plant = plant
         self.meshcat = meshcat
+        self.plot_traj = plot_traj
         self.last_time = 0.0
 
         # input/output ports
@@ -84,9 +85,10 @@ class DroneRotorController(LeafSystem):
         #     self.last_time = 99999.
 
         # plot trajectory via meshcat
-        if (context.get_time() - self.last_time > 0.1):
-            utils.plot_ref_frame(self.meshcat, f"traj_{context.get_time()}", X_DW_desired)
-            self.last_time = context.get_time()
+        if self.plot_traj:
+            if (context.get_time() - self.last_time > 0.1):
+                utils.plot_ref_frame(self.meshcat, f"traj_{context.get_time()}", X_DW_desired)
+                self.last_time = context.get_time()
 
         ## geometric controller
         # based on https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=5717652
@@ -180,26 +182,33 @@ class JointController(LeafSystem):
         qddot_d = state_d[-7:]
 
         # PI control
-        qdot = 1000*(q_d - q_cur) + 1000.*(qdot_d - qdot_cur)
+        qdot = 10*(q_d - q_cur) + 10.*(qdot_d - qdot_cur)
         derivatives.get_mutable_vector().SetFromVector(qdot)
 
 """
 Task space command controller for the arm (commands in drone frame)
 """
-class TaskWrapper(LeafSystem):
-    def __init__(self, plant: MultibodyPlant):
+class TaskController(LeafSystem):
+    def __init__(self, plant: MultibodyPlant, meshcat):
         LeafSystem.__init__(self)
 
         self.plant = plant
+        self.meshcat = meshcat
         self.plant_context = plant.CreateDefaultContext()
         self.drone_model = plant.GetModelInstanceByName("drone")
-        # TODO: check these frames
         self.end_effector_frame = plant.GetBodyByName("arm_link_fngr").body_frame()
         self.drone_frame = plant.GetBodyByName("quadrotor_link").body_frame()
 
+        # for testing: weld
+        self.weld = True
+        self.last_time = -1
+
         # inputs: current state and pose command
         # drone quat, drone xyz, q, quatdot, xyzdot, qdot
-        self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 27)
+        if self.weld:
+            self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 14)
+        else:
+            self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 27)
         # pose command (TODO)
         self.input_state_d_port = self.DeclareVectorInputPort("arm.vel_des", 6)
 
@@ -208,43 +217,54 @@ class TaskWrapper(LeafSystem):
         self.output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_index)
 
     def DoCalcTimeDerivatives(self, context, derivatives):
-        ## current state
+        if self.last_time == -1:
+            self.last_time = context.get_time()
+        # current state
         state = self.input_state_port.Eval(context)
-        q_cur = state[7:14]
-        qdot_cur = state[-7:]
+        if self.weld:
+            q_cur = state[:7]
+            qdot_cur = state[-7:]
 
-        # forward kinematics
-        self.plant.SetPositions(self.plant_context, self.drone_model, state[:14])
-        # compute jacobian
+            # fkin
+            self.plant.SetPositions(self.plant_context, self.drone_model, state[:7])
+        else:
+            q_cur = state[7:14]
+            qdot_cur = state[-7:]
+
+            # fkin
+            self.plant.SetPositions(self.plant_context, self.drone_model, state[:14])
+        # Jacobian
         J = self.plant.CalcJacobianSpatialVelocity(self.plant_context, JacobianWrtVariable.kQDot,
             self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
-        J = J[:,7:13] # remove gripper
-        # compute pose
+        if self.weld:
+            J = J[:,:6]
+        # pose
         pose_cur = self.plant.CalcRelativeTransform(self.plant_context, self.drone_frame, self.end_effector_frame)
 
-        ## desired state
-        # pose_d = self.input_state_d_port.Eval(context)
-        pose_d = RigidTransform(RotationMatrix(), np.array([0,0.5,0]))
-        twist_d = np.zeros([6]) # [w, v]
+        # compute the spatial velocity needed to approach the target
+        target_pose = RigidTransform(RotationMatrix(), np.array([0.2, 0, -0.32]))
+        utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/target", target_pose)
 
-        ## Compute command
-        # error terms
-        ep = pose_d.translation() - pose_cur.translation()
-        print(ep)
-        Rd = pose_d.rotation().matrix()
-        R = pose_cur.rotation().matrix()
-        eR = 0.5*utils.skew_to_vec(Rd.T @ R - R.T @ Rd)
+        ep = target_pose.translation() - pose_cur.translation()
+        prdot = np.zeros(3) + 1*ep
 
-        # desired velocity
-        state_d = twist_d + 10.*np.concatenate([eR, ep])
-
-        # IK
-        qdot_cmd = self.DiffIK(J, state_d, q_cur, qdot_cur, pose_cur.translation())
-        # add in gripper
-        qdot_cmd = np.concatenate([qdot_cmd, np.array([0.0])])
+        # Simple ikin
+        Jp = J[-3:,:]
+        Jp_inv = Jp.T @ np.linalg.inv(Jp @ Jp.T + 0.05**2 * np.eye(3))
+        qdot_cmd = Jp_inv.dot(prdot[-3:])
+        qdot_cmd = np.concatenate([qdot_cmd, np.zeros(1)])
+        
+        # discretely integrate
+        q_d = q_cur + self.plant.time_step()*qdot_cmd
 
         # send command
-        derivatives.get_mutable_vector().SetFromVector(qdot_cmd)
+        qdot = 1*(q_d - q_cur) + 10.*(qdot_cmd - qdot_cur)
+        # qdot = qdot_cmd
+
+        if (context.get_time() - self.last_time < 0.1):
+            qdot *= 0.
+
+        derivatives.get_mutable_vector().SetFromVector(qdot)
 
     def DiffIK(self, J, state_d, q_cur, v_cur, p_cur):
         # prog = MathematicalProgram()
@@ -264,7 +284,7 @@ class TaskWrapper(LeafSystem):
         # v_solution = result.GetSolution(v)
 
         Jp = J[-3:, :]
-        J_inv = Jp.T @ np.linalg.inv(Jp @ Jp.T + 0.05*0.05*np.eye(3));
+        J_inv = Jp.T @ np.linalg.inv(Jp @ Jp.T + 0.05*0.05*np.eye(3))
 
         v_solution = J_inv.dot(state_d[-3:])
 

@@ -30,15 +30,15 @@ def save_diagram(diagram):
 if __name__ == '__main__':
     ## Basic drone trajectory
     # in poses
-    start = np.array([-1.5,0,1.]).reshape([3,1])
-    end = np.array([1.5,0,1.]).reshape([3,1])
-    intermediate = np.array([0.,0,-0.5]).reshape([3,1])
-    trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
-
-    # start = np.array([0,0,1.]).reshape([3,1])
-    # end = np.array([0,0,1.]).reshape([3,1])
-    # intermediate = np.array([0.,0,1]).reshape([3,1])
+    # start = np.array([-1.5,0,1.]).reshape([3,1])
+    # end = np.array([1.5,0,1.]).reshape([3,1])
+    # intermediate = np.array([0.,0,-0.5]).reshape([3,1])
     # trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+
+    start = np.array([0,0,1.]).reshape([3,1])
+    end = np.array([0,0,1.]).reshape([3,1])
+    intermediate = np.array([0.,0,1]).reshape([3,1])
+    trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -53,7 +53,7 @@ if __name__ == '__main__':
         discrete_contact_approximation = "sap"
     )
 
-    # Create plant (objects we will not control)
+    # Create plant
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=sim_time_step)
     parser = Parser(plant, scene_graph)
@@ -62,8 +62,6 @@ if __name__ == '__main__':
     models = ProcessModelDirectives(directives, plant, parser)
     ApplyMultibodyPlantConfig(plant_config, plant)
 
-    # drone_instance = plant.GetModelInstanceByName("drone")
-    # plant.set_gravity_enabled(drone_instance, False) # gravity compensation.
     plant.Finalize()
 
     # Add visualizer
@@ -71,44 +69,33 @@ if __name__ == '__main__':
     animator = meshcat_vis.StartRecording()
     animator = None # stop auto-tracking of drone movement
 
-    # Drone position -> poses
-    traj_system = builder.AddSystem(Traj.FlatnessInverter(trajectory, animator))
-
-    # Predefine trajectory for drone arm
-    drone_instance = plant.GetModelInstanceByName("drone")
-    # TEMP: FIX THE ARM
-    # plant.GetJointByName("arm_sh0").set_position_limits([-0.],[0.])
-    # plant.GetJointByName("arm_sh1").set_position_limits([-0.],[0.])
-    # plant.GetJointByName("arm_el0").set_position_limits([-0.],[0.])
-    # plant.GetJointByName("arm_el1").set_position_limits([-0.],[0.])
-    # plant.GetJointByName("arm_wr0").set_position_limits([-0.],[0.])
-    # plant.GetJointByName("arm_wr1").set_position_limits([-0.],[0.])
-    # plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
-    # plant.GetJointByName("arm_sh1").set_position_limits(
-    #         [-np.inf], [np.inf]
-    #     )
-    q_desired = np.array([0., -1.16, 1.18, 1.37, 0, 0, -0.92])
-    q_closed = np.array([0., -1.16, 1.18, 1.37, 0, 0, -0.5])
-    drone_traj = builder.AddSystem(Traj.ArmTrajectory([q_desired,q_closed], [0., 3.4], [1., 3.6]))
-    builder.Connect(plant.get_state_output_port(drone_instance), drone_traj.input_state_port)
-    # joint controller for drone arm
-    arm_controller = builder.AddNamedSystem("arm_controller", Control.JointController())
-    builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.input_state_port)
-    builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
-    builder.Connect(drone_traj.output_joint_port, arm_controller.input_state_d_port)
-
-    # task controller for drone arm
-    # arm_controller = builder.AddNamedSystem("arm_task_wrapper", Control.TaskWrapper(plant))
-    # builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.input_state_port)
-    # builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
-    # builder.Connect(drone_traj.output_vel_port, arm_controller.input_state_d_port)
-
-    # simple controller for drone
-    drone_controller = builder.AddNamedSystem("drone_controller", Control.DroneRotorController(plant, meshcat))
+    ## Drone
+    # low-level controller
+    drone_controller = builder.AddNamedSystem("drone_controller", Control.DroneRotorController(plant, meshcat, plot_traj=False))
     builder.Connect(plant.get_body_poses_output_port(), drone_controller.input_poses_port)
     builder.Connect(plant.get_body_spatial_velocities_output_port(), drone_controller.input_vels_port)
-    builder.Connect(traj_system.output_port, drone_controller.input_state_d_port)
     builder.Connect(drone_controller.output_port, plant.get_applied_spatial_force_input_port())
+
+    # trajectory generation
+    traj_system = builder.AddSystem(Traj.FlatnessInverter(trajectory, animator))
+    builder.Connect(traj_system.output_port, drone_controller.input_state_d_port)
+
+    ## Arm
+    drone_instance = plant.GetModelInstanceByName("drone")
+    plant.GetJointByName("arm_sh0").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_sh1").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_el0").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_el1").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_wr0").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
+    # low-level controller
+    arm_controller = builder.AddNamedSystem("arm_controller", Control.TaskController(plant, meshcat))
+    builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.input_state_port)
+    builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
+
+    # trajectory generation
+    # TODO
 
     # Add visualizer and build
     diagram = builder.Build()
@@ -136,3 +123,10 @@ if __name__ == '__main__':
 #   - compute object position/velocity in (moving) drone frame
 #   - first, assume drone perfectly tracks trajectory
 #   - migrate to dynamically redoing trajectory based on current drone pose
+
+# Plan:
+# 1. task space control for arm
+# 2. task space planning for arm: match position and velocity of object
+# Ideally finish these by Wednesday.
+# 3. Grasp selection (should be easy)
+# 4. Compare with Hessian

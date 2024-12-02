@@ -54,28 +54,6 @@
         <!-- <drake:hunt_crossley_dissipation value="1.25"/> -->
       </drake:proximity_properties>
     </collision>
-    <collision>
-      <geometry>
-        <mesh filename="package://aerial_grasping/assets/spot/collision/arm_link_sh0_left_motor.obj" scale="0.6 0.6 0.6" />
-      </geometry>
-      <drake:proximity_properties>
-        <drake:compliant_hydroelastic/>
-        <drake:mesh_resolution_hint value="0.1"/>
-        <drake:hydroelastic_modulus value="5e7"/>
-        <!-- <drake:hunt_crossley_dissipation value="1.25"/> -->
-      </drake:proximity_properties>
-    </collision>
-    <collision>
-      <geometry>
-        <mesh filename="package://aerial_grasping/assets/spot/collision/arm_link_sh0_right_motor.obj" scale="0.6 0.6 0.6" />
-      </geometry>
-      <drake:proximity_properties>
-        <drake:compliant_hydroelastic/>
-        <drake:mesh_resolution_hint value="0.1"/>
-        <drake:hydroelastic_modulus value="5e7"/>
-        <!-- <drake:hunt_crossley_dissipation value="1.25"/> -->
-      </drake:proximity_properties>
-    </collision>
     <inertial>
       <origin rpy="0.0013490340912847287 -0.15433618253071657 0.0066354181456347305" xyz="-0.012372709810733795 -4.5211403630673885e-05 -0.02103196457028389"/>
       <mass value=".23364000000000003"/>
