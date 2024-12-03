@@ -90,9 +90,9 @@ if __name__ == '__main__':
     # plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
     plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
     # low-level controller
-    arm_controller = builder.AddNamedSystem("arm_controller", Control.TaskController2(plant, meshcat))
+    arm_controller = builder.AddNamedSystem("arm_controller", Control.TaskController(plant, meshcat))
     builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.state_input_port)
-    builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
+    builder.Connect(arm_controller.cmd_output_port, plant.get_actuation_input_port(drone_instance))
 
     # trajectory generation
     # TODO

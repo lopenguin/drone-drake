@@ -190,7 +190,7 @@ class JointController(LeafSystem):
 Task space command controller for the arm (commands in drone frame).
 Currently designed with fixed drone in mind.
 """
-class TaskController2(LeafSystem):
+class TaskController(LeafSystem):
     def __init__(self, plant: MultibodyPlant, meshcat):
         LeafSystem.__init__(self)
 
@@ -203,12 +203,12 @@ class TaskController2(LeafSystem):
         self.end_effector_frame = plant.GetBodyByName("arm_link_fngr").body_frame()
         self.drone_frame = plant.GetBodyByName("quadrotor_link").body_frame()
 
-        # inputs: current state
+        # input: current state
         self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14) # [q, qdot]
 
-        # ouputs: joint velocity command
+        # ouput: joint velocity command
         state_idx = self.DeclareContinuousState(7)
-        self.output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_idx)
+        self.cmd_output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_idx)
 
         # pre-define target pose
         self.target_position = np.array([0.3, 0., -0.52])
@@ -226,6 +226,8 @@ class TaskController2(LeafSystem):
         pose_cur = self.plant.CalcRelativeTransform(self.vcontext, self.drone_frame, self.end_effector_frame)
         J = self.plant.CalcJacobianSpatialVelocity(self.vcontext, JacobianWrtVariable.kQDot,
                 self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
+        # ignore gripper and drone terms
+        J = J[:,:6]
         
         # set last q first time only
         if self.trigger_only_once:
@@ -238,13 +240,8 @@ class TaskController2(LeafSystem):
         # pick spatial velocity to drive towards target position
         target_vel = 2*(self.target_position - pose_cur.translation())
 
-        # weighted pseudoinverse (TODO: replace with opt problem)
-        Jp = J[-3:,:6] # only translational derivatives, exclude gripper
-        gam = 0.05
-        Jp_inv = Jp.T @ np.linalg.inv(Jp @ Jp.T + gam*gam*np.eye(3))
-
-        # inverse kinematics
-        qd_des = Jp_inv @ target_vel
+        # inverse kinematics TODO: replace with opt prob with joint limits
+        qd_des = self.DiffIK_WeightPinv(J, target_vel, translation_only=True)
         q_des = self.last_q_des + qd_des*self.plant.time_step()
         self.last_q_des = q_des
 
@@ -256,108 +253,37 @@ class TaskController2(LeafSystem):
         derivatives.get_mutable_vector().SetFromVector(qdot_cmd)
 
 
-
-"""
-Task space command controller for the arm (commands in drone frame)
-"""
-class TaskController(LeafSystem):
-    def __init__(self, plant: MultibodyPlant, meshcat):
-        LeafSystem.__init__(self)
-
-        self.plant = plant
-        self.meshcat = meshcat
-        self.plant_context = plant.CreateDefaultContext()
-        self.drone_model = plant.GetModelInstanceByName("drone")
-        self.end_effector_frame = plant.GetBodyByName("arm_link_fngr").body_frame()
-        self.drone_frame = plant.GetBodyByName("quadrotor_link").body_frame()
-
-        # for testing: weld
-        self.weld = True
-        self.last_time = -1
-
-        # inputs: current state and pose command
-        # drone quat, drone xyz, q, quatdot, xyzdot, qdot
-        if self.weld:
-            self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 14)
-        else:
-            self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 27)
-        # pose command (TODO)
-        self.input_state_d_port = self.DeclareVectorInputPort("arm.vel_des", 6)
-
-        # output: joint position, velocity, acceleration command
-        state_index = self.DeclareContinuousState(7)
-        self.output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_index)
-
-    def DoCalcTimeDerivatives(self, context, derivatives):
-        if self.last_time == -1:
-            self.last_time = context.get_time()
-        # current state
-        state = self.input_state_port.Eval(context)
-        if self.weld:
-            q_cur = state[:7]
-            qdot_cur = state[-7:]
-
-            # fkin
-            self.plant.SetPositions(self.plant_context, self.drone_model, state[:7])
-        else:
-            q_cur = state[7:14]
-            qdot_cur = state[-7:]
-
-            # fkin
-            self.plant.SetPositions(self.plant_context, self.drone_model, state[:14])
-        # Jacobian
-        J = self.plant.CalcJacobianSpatialVelocity(self.plant_context, JacobianWrtVariable.kQDot,
-            self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
-        if self.weld:
-            J = J[:,:6]
-        # pose
-        pose_cur = self.plant.CalcRelativeTransform(self.plant_context, self.drone_frame, self.end_effector_frame)
-
-        # compute the spatial velocity needed to approach the target
-        target_pose = RigidTransform(RotationMatrix(), np.array([0.2, 0, -0.32]))
-        utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/target", target_pose)
-
-        ep = target_pose.translation() - pose_cur.translation()
-        prdot = np.zeros(3) + 7*ep
-
-        # Simple ikin
-        Jp = J[-3:,:]
-        Jp_inv = Jp.T @ np.linalg.inv(Jp @ Jp.T + 0.05**2 * np.eye(3))
-        qdot_cmd = Jp_inv.dot(prdot[-3:])
-        qdot_cmd = np.concatenate([qdot_cmd, np.zeros(1)])
+    def DiffIK_WeightPinv(self, J, target_vel, translation_only=False):
+        """
+        Solves for qdot to give a target velocity
+        """
+        if translation_only:
+            J = J[-3:,:]
+            target_vel = target_vel[-3:]
         
-        # discretely integrate
-        q_d = q_cur + self.plant.time_step()*qdot_cmd
+        gam = 0.05
+        J_inv = J.T @ np.linalg.inv(J @ J.T + gam*gam*np.eye(J.shape[0]))
+        qd_cmd = J_inv @ target_vel
+        return qd_cmd
 
-        # send command
-        qdot = self.plant.time_step()*(q_d - q_cur) + 0*(qdot_cmd - qdot_cur)
-        # qdot = qdot_cmd
 
-        if (context.get_time() - self.last_time < 0.1):
-            qdot *= 0.
+    # TODO: try this out!
+    def DiffIK_JointLimits(self, J, target_vel):
+        prog = MathematicalProgram()
+        v = prog.NewContinuousVariables(6, "v")
+        v_max = 3.0 # TODO: reconsider?
 
-        derivatives.get_mutable_vector().SetFromVector(qdot)
+        # Add cost and constraints to prog here.
+        prog.AddCost((J @ v - target_vel).T @ (J @ v - target_vel)) # l2 norm
+        prog.AddBoundingBoxConstraint(-v_max, v_max, v)
+        # TODO: add joint limits
 
-    def DiffIK(self, J, state_d, q_cur, v_cur, p_cur):
-        # prog = MathematicalProgram()
-        # v = prog.NewContinuousVariables(7, "v")
-        # v_max = 3.0 # TODO: reconsider?
+        solver = SnoptSolver()
+        result = solver.Solve(prog)
 
-        # # Add cost and constraints to prog here.
-        # prog.AddCost((J @ v - state_d).T @ (J @ v - state_d))
-        # prog.AddBoundingBoxConstraint(-v_max, v_max, v)
+        if not (result.is_success()):
+            raise ValueError("Could not find the optimal solution.")
 
-        # solver = SnoptSolver()
-        # result = solver.Solve(prog)
-
-        # if not (result.is_success()):
-        #     raise ValueError("Could not find the optimal solution.")
-
-        # v_solution = result.GetSolution(v)
-
-        Jp = J[-3:, :]
-        J_inv = Jp.T @ np.linalg.inv(Jp @ Jp.T + 0.05*0.05*np.eye(3))
-
-        v_solution = J_inv.dot(state_d[-3:])
+        v_solution = result.GetSolution(v)
 
         return v_solution
