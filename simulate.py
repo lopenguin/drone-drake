@@ -38,7 +38,7 @@ if __name__ == '__main__':
     start = np.array([0,0,1.]).reshape([3,1])
     end = np.array([0,0,1.]).reshape([3,1])
     intermediate = np.array([0.,0,1]).reshape([3,1])
-    trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+    trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.5,2.])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -82,16 +82,16 @@ if __name__ == '__main__':
 
     ## Arm
     drone_instance = plant.GetModelInstanceByName("drone")
-    plant.GetJointByName("arm_sh0").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_sh1").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_el0").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_el1").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_wr0").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_sh0").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_sh1").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_el0").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_el1").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_wr0").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
     plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
     # low-level controller
-    arm_controller = builder.AddNamedSystem("arm_controller", Control.TaskController(plant, meshcat))
-    builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.input_state_port)
+    arm_controller = builder.AddNamedSystem("arm_controller", Control.TaskController2(plant, meshcat))
+    builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.state_input_port)
     builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
 
     # trajectory generation

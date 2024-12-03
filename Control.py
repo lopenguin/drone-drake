@@ -4,7 +4,7 @@ Controllers for the drone and arm
 
 import numpy as np
 
-from pydrake.systems.framework import LeafSystem
+from pydrake.systems.framework import Context, ContinuousState, LeafSystem
 from pydrake.math import RollPitchYaw
 from pydrake.multibody.plant import MultibodyPlant
 from pydrake.all import (
@@ -185,6 +185,78 @@ class JointController(LeafSystem):
         qdot = 10*(q_d - q_cur) + 10.*(qdot_d - qdot_cur)
         derivatives.get_mutable_vector().SetFromVector(qdot)
 
+
+"""
+Task space command controller for the arm (commands in drone frame).
+Currently designed with fixed drone in mind.
+"""
+class TaskController2(LeafSystem):
+    def __init__(self, plant: MultibodyPlant, meshcat):
+        LeafSystem.__init__(self)
+
+        self.plant = plant
+        self.meshcat = meshcat
+
+        # for fkin
+        self.vcontext = plant.CreateDefaultContext()
+        self.drone_model = plant.GetModelInstanceByName("drone")
+        self.end_effector_frame = plant.GetBodyByName("arm_link_fngr").body_frame()
+        self.drone_frame = plant.GetBodyByName("quadrotor_link").body_frame()
+
+        # inputs: current state
+        self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14) # [q, qdot]
+
+        # ouputs: joint velocity command
+        state_idx = self.DeclareContinuousState(7)
+        self.output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_idx)
+
+        # pre-define target pose
+        self.target_position = np.array([0.3, 0., -0.52])
+        utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/target", RigidTransform(RotationMatrix(),self.target_position))
+
+        # FOR TESTING
+        self.trigger_only_once = True
+
+    def DoCalcTimeDerivatives(self, context, derivatives):
+        # get current state
+        state = self.state_input_port.Eval(context)
+
+        # forward kinematics
+        self.plant.SetPositions(self.vcontext, self.drone_model, state[:7])
+        pose_cur = self.plant.CalcRelativeTransform(self.vcontext, self.drone_frame, self.end_effector_frame)
+        J = self.plant.CalcJacobianSpatialVelocity(self.vcontext, JacobianWrtVariable.kQDot,
+                self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
+        
+        # set last q first time only
+        if self.trigger_only_once:
+            self.trigger_only_once = False
+            self.last_q_des = state[:6]
+            utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/should", RigidTransform(RotationMatrix(),self.target_position))
+            # self.target_position = pose_cur.translation()
+
+
+        # pick spatial velocity to drive towards target position
+        target_vel = 2*(self.target_position - pose_cur.translation())
+
+        # weighted pseudoinverse (TODO: replace with opt problem)
+        Jp = J[-3:,:6] # only translational derivatives, exclude gripper
+        gam = 0.05
+        Jp_inv = Jp.T @ np.linalg.inv(Jp @ Jp.T + gam*gam*np.eye(3))
+
+        # inverse kinematics
+        qd_des = Jp_inv @ target_vel
+        q_des = self.last_q_des + qd_des*self.plant.time_step()
+        self.last_q_des = q_des
+
+        qdot = 1000*(qd_des - state[-7:-1]) #+ 10*(q_des - self.last_q_des)
+        # TODO: this is not a great controller, but need to move on
+
+        # second command
+        qdot_cmd = np.concatenate([qdot, np.zeros(1)])
+        derivatives.get_mutable_vector().SetFromVector(qdot_cmd)
+
+
+
 """
 Task space command controller for the arm (commands in drone frame)
 """
@@ -246,7 +318,7 @@ class TaskController(LeafSystem):
         utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/target", target_pose)
 
         ep = target_pose.translation() - pose_cur.translation()
-        prdot = np.zeros(3) + 1*ep
+        prdot = np.zeros(3) + 7*ep
 
         # Simple ikin
         Jp = J[-3:,:]
@@ -258,7 +330,7 @@ class TaskController(LeafSystem):
         q_d = q_cur + self.plant.time_step()*qdot_cmd
 
         # send command
-        qdot = 1*(q_d - q_cur) + 10.*(qdot_cmd - qdot_cur)
+        qdot = self.plant.time_step()*(q_d - q_cur) + 0*(qdot_cmd - qdot_cur)
         # qdot = qdot_cmd
 
         if (context.get_time() - self.last_time < 0.1):
