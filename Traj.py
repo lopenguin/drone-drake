@@ -231,6 +231,13 @@ class ArmTrajectoryPlanner2(LeafSystem):
     def EvalStateMachine(self, context, output):
         t = context.get_time() - 1e-4
 
+        # get current state
+        state = self.state_input_port.Eval(context)
+        self.q_cur = state[:6] # no gripper
+        self.qdot_cur = state[-7:-1]
+        self.q_gripper = state[6]
+        self.qdot_gripper = state[-1]
+
         # first time setup
         if len(self.segments) == 0:
             # creates basic segments
@@ -245,10 +252,11 @@ class ArmTrajectoryPlanner2(LeafSystem):
             self.segments.pop(0)
             self.start_time = t
             if len(self.segments) == 0:
-                self.terminate(context)
+                self.terminate()
 
+            if type(self.segments[0]) == utils.SegmentConstructor:
+                self.segments[0] = self.make_segment(self.segments[0])
             current_segment = self.segments[0]
-            # TODO: adjust current segment here
             print(f"Executing {current_segment.name}...")
 
             # draw target position
@@ -266,7 +274,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             p_ddot = q_ddot
 
             # (differential) inverse kinematics
-            q, q_dot, q_ddot = self.ikin(context, p, p_dot, p_ddot)
+            q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot)
 
         # [x, y, z position, theta angle]
         elif q.shape[0] == 4:
@@ -274,21 +282,21 @@ class ArmTrajectoryPlanner2(LeafSystem):
             p_dot = q_dot[:3]
             p_ddot = q_ddot[:3]
 
-            theta = q[-1]
+            theta = q[-1] * current_segment.tot_angle
             R = utils.R_from_axisangle(current_segment.axis, theta) @ current_segment.R0
             theta_dot = current_segment.axis * q_dot[-1]
             theta_ddot = current_segment.axis * q_ddot[-1] # check
 
             # (differential) inverse kinematics
-            q, q_dot, q_ddot = self.ikin(context, p, p_dot, p_ddot, R, theta_dot, theta_ddot)
+            q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot, R, theta_dot, theta_ddot)
         elif q.shape[0] != 6:
             print("Unrecognized spline shape:", q.shape)
             input()
 
         # add gripper command
-        q = np.concatenate([q, np.zeros(1)])
-        q_dot = np.concatenate([q_dot, np.zeros(1)])
-        q_ddot = np.concatenate([q_ddot, np.zeros(1)])
+        q = np.append(q, 0.)
+        q_dot = np.append(q_dot, 0.)
+        q_ddot = np.append(q_ddot, 0.)
 
         # send command to joint controller
         output.set_value(np.concatenate((q, q_dot, q_ddot)))
@@ -300,9 +308,8 @@ class ArmTrajectoryPlanner2(LeafSystem):
         TODO
         """
         # get current joint position
-        state = self.state_input_port.Eval(context)
-        q0 = state[:6] # TODO: these are going to change if we unfix the drone frame
-        q0_dot = state[-7:-1]
+        q0 = self.q_cur
+        q0_dot = self.qdot_cur
         
         # inital joint motion
         qd1 = np.array([0., -1.16, 1.18, 1.37, 0, 0])
@@ -312,34 +319,32 @@ class ArmTrajectoryPlanner2(LeafSystem):
                                 duration, name="initial")
         self.segments.append(s)
         
-        # a task space motion
-        pose_d1 = self.fkin(np.concatenate([qd1, np.zeros(1)]))
+        # a position-only task space motion
+        pose_d1 = self.fkin(np.append(qd1, 0.))
         p_d1 = pose_d1.translation()
         p_d2 = p_d1 + np.array([0.,0.,0.4])
-        duration = 1.5
+        duration = 1.0
         s = utils.QuinticSpline(p_d1, np.zeros_like(p_d1), np.zeros_like(p_d1),
                                 p_d2, np.array([0.,0.,-0.5]), np.zeros_like(p_d2),
                                 duration, name="fun")
         self.segments.append(s)
 
-        # # third joint motion (just for fun)
-        # qd3 = np.array([1.36, -0.5, 1.18, 1.37, 0, 0])
-        # duration = 0.5
-        # s = utils.QuinticSpline(qd2, np.zeros_like(qd2), np.zeros_like(qd2),
-        #                         qd3, np.zeros_like(qd3), np.zeros_like(qd3),
-        #                         duration, name="fun2")
-        # self.segments.append(s)
+        # a whole pose task-space motion
+        delta_p_d3 = np.array([-0.1, 0.,-0.1])
+        Rf3 = np.eye(3)
+        duration = 1.0
+        c = utils.SegmentConstructor("pose", duration,
+                delta_p_d3, np.zeros_like(delta_p_d3), np.zeros_like(delta_p_d3), delta=[True, False],
+                Rf=np.eye(3), delta_R=True, name="whole")
+        self.segments.append(c)
         
-    def ikin(self, context, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None):
+    def ikin(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None):
         """
         returns joint space commands for arm
         TODO
         """
-        # get current joint position
-        state = self.state_input_port.Eval(context)
-
         # forward kinematics
-        pose_cur = self.fkin(state[:7]) # must call before calc jacobian to set positions
+        pose_cur = self.fkin(np.append(self.q_cur, self.q_gripper)) # must call before calc jacobian to set positions
         J = self.plant.CalcJacobianSpatialVelocity(self.virtual_context, JacobianWrtVariable.kQDot,
                 self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
         # ignore gripper and drone terms
@@ -358,7 +363,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         q_dot = J_inv @ target_vel
 
         # discretely integrate to get q
-        q = state[:6] + q_dot*self.plant.time_step()
+        q = self.q_cur + q_dot*self.plant.time_step()
 
         q_ddot = np.zeros_like(q)
 
@@ -374,14 +379,51 @@ class ArmTrajectoryPlanner2(LeafSystem):
         vel = self.end_effector_frame.CalcSpatialVelocity(self.virtual_context, self.drone_frame, self.drone_frame)
         return pose, vel
     
-    def terminate(self, context):
+    def make_segment(self, constructor: utils.SegmentConstructor):
+        if constructor.space == "joint":
+            q_f = self.q_cur*constructor.delta[0] + constructor.qf
+            qdot_f = self.q_cur*constructor.delta[1] + constructor.qf_dot
+            qddot_f = constructor.qf_ddot
+
+            return utils.QuinticSpline(self.q_cur, self.qdot_cur, np.zeros_like(self.q_cur),
+                        q_f, qdot_f, qddot_f, constructor.T, name=constructor.name)
+        elif constructor.space == "position":
+            pose, vel = self.fkin(np.append(self.q_cur, 0.),np.append(self.qdot_cur, 0.))
+            p0 = pose.translation()
+            v0 = vel.translational()
+            pf = p0*constructor.delta[0] + constructor.qf
+            vf = v0*constructor.delta[1] + constructor.qf_dot
+            af = constructor.qf_ddot
+            
+            return utils.QuinticSpline(p0, v0, np.zeros_like(p0),
+                        pf, vf, af, constructor.T, name=constructor.name)
+        elif constructor.space == "pose":
+            pose, vel = self.fkin(np.append(self.q_cur, 0.),np.append(self.qdot_cur, 0.))
+            R0 = pose.rotation().matrix()
+            p0 = np.append(pose.translation(), 0.)
+            v0 = np.append(vel.translational(), 0.)
+            pf = p0[:3]*constructor.delta[0] + constructor.qf
+            pf = np.append(pf, 1.)
+            vf = v0[:3]*constructor.delta[1] + constructor.qf_dot
+            vf = np.append(vf, 0.)
+            af = constructor.qf_ddot
+            af = np.append(af, 0.)
+
+            Rf = constructor.Rf
+            if constructor.delta_R:
+                Rf = Rf @ R0
+            
+            return utils.QuinticSplineR(p0, v0, np.zeros_like(p0), R0,
+                        pf, vf, af, Rf, constructor.T, name=constructor.name)
+        else:
+            print(f"Unknown space: {constructor.space}")
+    
+    def terminate(self):
         """
         returns terminating segments to stop and hold
         """
-        # get current joint position
-        state = self.state_input_port.Eval(context)
-        q0 = state[:6] # TODO: these are going to change if we unfix the drone frame
-        q0_dot = state[-7:-1]
+        q0 = self.q_cur
+        q0_dot = self.qdot_cur
 
         # slow to stop
         qd = q0 + q0_dot*0.2
@@ -405,8 +447,8 @@ class ArmTrajectoryPlanner2(LeafSystem):
         # [x, y, z position, theta angle]
         elif q.shape[0] == 4:
             # se(3)
-            pose = RigidTransform(RotationMatrix(segment.Rf, q[:3]))
+            pose = RigidTransform(RotationMatrix(segment.Rf), q[:3])
         else:
-            pose = self.fkin(np.concatenate([q, np.zeros(1)]))
+            pose = self.fkin(np.append(q, 0.))
 
         utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/{segment.name}", pose)

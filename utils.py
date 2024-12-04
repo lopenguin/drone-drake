@@ -241,6 +241,28 @@ class QuinticSplineR(QuinticSpline):
         self.Rf = Rf
         (self.axis, self.tot_angle) = axisangle_from_R(R0.T @ Rf)
 
+class SegmentConstructor():
+    '''
+    Parameters to construct segment from where previous segment ended.
+    joint space:
+        - give qf (final joint config) or deltaqf (change in joint angles)
+    position space:
+        - give qf (final position) or deltaqf (change in position)
+    pose space:
+        - qf is positions, Rf is rotations
+    '''
+    def __init__(self, space, T, qf, qf_dot, qf_ddot, delta=[False,False], Rf=None, delta_R=False, name=""):
+        self.space = space
+        self.T = T
+        self.qf = qf
+        self.qf_dot = qf_dot
+        self.qf_ddot = qf_ddot
+        self.delta = delta
+
+        self.Rf = Rf
+        self.delta_R = delta_R
+        self.name = name
+
 # reference: http://www.farinhansford.com/gerald/classes/cse570/additions/orientation.pdf
 def axisangle_from_R(R):
     axis = (R + R.T - (np.trace(R) - 1)*np.eye(3))[0:3, 0]
