@@ -204,13 +204,11 @@ State machine for trajectory planner.
 Issues commands in joint space.
 '''
 class ArmTrajectoryPlanner2(LeafSystem):
-    def __init__(self, plant: MultibodyPlant, meshcat, pose_desired, vel_desired = SpatialVelocity([0]*6)):
+    def __init__(self, plant: MultibodyPlant, meshcat):
         LeafSystem.__init__(self)
         
         self.plant = plant
         self.meshcat = meshcat
-        self.pose_desired = pose_desired
-        self.vel_desired = vel_desired
 
         # setup for fkin
         self.virtual_context = plant.CreateDefaultContext()
@@ -227,64 +225,123 @@ class ArmTrajectoryPlanner2(LeafSystem):
         self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14) # [q, qdot]
 
         # output joint port: [q_cmd, qd_cmd, qdd_cmd]
-        self.joint_output_port = self.DeclareVectorOutputPort("arm.state_des", 21, self.CalcJointState, {self.time_ticket()})
+        self.joint_output_port = self.DeclareVectorOutputPort("arm.state_des", 21, self.EvalStateMachine, {self.time_ticket()})
 
     def EvalStateMachine(self, context, output):
         t = context.get_time() - 1e-4
-        if self.position_traj == None:
-            self.start_time = t
+
+        # first time setup
+        if len(self.segments) == 0:
+            # creates basic segments
             self.make_traj_to_grasp(context)
-            utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/should", self.pose_desired)
+            self.start_time = t
+            print(f"Executing {self.segments[0].name}...")
 
-        if t > (self.start_time + self.position_traj.duration()):
-            # TODO: need some reasoning
-            pass
+        current_segment = self.segments[0]
+        # move to next segment if needed
+        if t > (self.start_time + current_segment.duration()):
+            self.segments.pop(0)
+            self.start_time = t
+            if len(self.segments) == 0:
+                self.terminate(context)
 
-        if t < self.start_time:
-            return
+            current_segment = self.segments[0]
+            # TODO: adjust current segment here
+            print(f"Executing {current_segment.name}...")
 
-        # eval position trajectory
-        p = self.position_traj.evaluate(t - self.start_time)
-        p_dot = self.position_traj.EvalDerivative(t - self.start_time)
+            # draw target position
+            
+        
+        # execute current segment
+        q = current_segment.evaluate(t - self.start_time)
+        q_dot = current_segment.EvalDerivative(t - self.start_time)
+        q_ddot = current_segment.EvalDerivative(t - self.start_time, 2)
 
-        # send command
-        pose_des = RigidTransform(RotationMatrix(), p)
-        vel_des = SpatialVelocity(np.zeros(3), p_dot)
+        # [x, y, z position, theta angle]
+        if q.shape[0] == 4:
+            p = q[:3]
+            p_dot = q_dot[:3]
+            p_ddot = q_ddot[:3]
 
-        out = utils.PoseVelocity(pose_des, vel_des)
+            theta = q[-1]
+            R = utils.R_from_axisangle(current_segment.axis, theta) @ current_segment.R0
+            theta_dot = current_segment.axis * q_dot[-1]
+            theta_ddot = current_segment.axis * q_ddot[-1] # check
 
-        # TODO
-        # might want to do the ikin here so we can weight rotations differently
-        # for now, just send des pose/vel to controller.
-        # TODO: also may want to run RRT or some kind of simple planner
+            # (differential) inverse kinematics
+            q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot, R, theta_dot, theta_ddot)
+        elif q.shape[0] != 6:
+            print("Unrecognized spline shape:", q.shape)
+            input()
 
-        output.set_value(out)
+        # add gripper command
+        q = np.concatenate([q, np.zeros(1)])
+        q_dot = np.concatenate([q_dot, np.zeros(1)])
+        q_ddot = np.concatenate([q_ddot, np.zeros(1)])
+
+        # send command to joint controller
+        output.set_value(np.concatenate((q, q_dot, q_ddot)))
 
     def make_traj_to_grasp(self, context):
-        q_cur = self.state_input_port.Eval(context)
-        # fkin
-        self.plant.SetPositions(self.virtual_context, self.drone_model, q_cur[:7])
-        self.plant.SetVelocities(self.virtual_context, self.drone_model, q_cur[7:])
-        pose_cur = self.plant.CalcRelativeTransform(self.virtual_context, self.drone_frame, self.end_effector_frame)
-        test_context = self.virtual_context #self.GetMyContextFromRoot(context)
-        vel_cur  = self.end_effector_frame.CalcSpatialVelocity(test_context, self.drone_frame, self.drone_frame)
+        """
+        Defines a list of segments to grasp object,
+        can mix joint space and task space commands (ikin is handled in state machine)
+        TODO
+        """
+        # get current joint position
+        state = self.state_input_port.Eval(context)
+        q0 = state[:6] # TODO: these are going to change if we unfix the drone frame
+        q0_dot = state[-7:-1]
+        
+        # inital joint motion
+        qd1 = np.array([0., -1.16, 1.18, 1.37, 0, 0])
+        duration = 1.0
+        s = utils.QuinticSpline(q0, q0_dot, np.zeros_like(q0),
+                                qd1, np.zeros_like(qd1), np.zeros_like(qd1),
+                                duration, name="initial")
+        self.segments.append(s)
+        
+        # second joint motion (just for fun)
+        qd2 = np.array([0., -0.5, 1.18, 1.37, 0, 0])
+        duration = 0.5
+        s = utils.QuinticSpline(qd1, np.zeros_like(qd1), np.zeros_like(q0),
+                                qd2, np.zeros_like(qd2), np.zeros_like(qd2),
+                                duration, name="fun")
+        self.segments.append(s)
 
-        # spline translation/linear velocity
-        # TODO: convert to polynomial spline for velocity constraints
-        self.position_traj = utils.CubicSpline(pose_cur.translation(), vel_cur.translational(),
-                                      self.pose_desired.translation(), self.vel_desired.translational(),
-                                      self.end_time - self.start_time)
+        # third joint motion (just for fun)
+        qd3 = np.array([1.36, -0.5, 1.18, 1.37, 0, 0])
+        duration = 0.5
+        s = utils.QuinticSpline(qd2, np.zeros_like(qd2), np.zeros_like(qd2),
+                                qd3, np.zeros_like(qd3), np.zeros_like(qd3),
+                                duration, name="fun2")
+        self.segments.append(s)
         
-        # spline rotation/angular velocity
-        # TODO: later
-        self.rotation_traj = None
-        
-    def compute_relative_vel(self, context, X_DC):
-        # frame D: drone
-        # frame C: end effector
-        # frame W: world
-        # TODO: CHECK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        V_D_CD = self.end_effector_frame.CalcSpatialVelocity(context, self.drone_frame, self.drone_frame)
+    def ikin(self, p, p_dot, p_ddot, R, theta_dot, theta_ddot):
+        """
+        returns joint space commands for arm
+        TODO
+        """
+        pass
+    
+    def terminate(self, context):
+        """
+        returns terminating segments to stop and hold
+        """
+        # get current joint position
+        state = self.state_input_port.Eval(context)
+        q0 = state[:6] # TODO: these are going to change if we unfix the drone frame
+        q0_dot = state[-7:-1]
 
-        return V_D_CD
-        
+        # slow to stop
+        qd = q0 + q0_dot*0.2
+        s = utils.QuinticSpline(q0, q0_dot, np.zeros_like(q0),
+                                qd, np.zeros_like(qd), np.zeros_like(qd),
+                                0.1, name="slow")
+        self.segments.append(s)
+
+        # hold indefinitely
+        s = utils.QuinticSpline(qd, np.zeros_like(qd), np.zeros_like(qd),
+                                qd, np.zeros_like(qd), np.zeros_like(qd),
+                                100., name="stop")
+        self.segments.append(s)

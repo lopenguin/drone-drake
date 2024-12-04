@@ -156,8 +156,9 @@ class PoseVelocity:
 
 ## Standard splines
 class Segment:
-    def __init__(self, T):
+    def __init__(self, T, name=""):
         self.T = T
+        self.name = name
         pass
 
     def evaluate(self, t):
@@ -184,8 +185,8 @@ class Segment:
     
 class CubicSpline(Segment):
     # Initialize.
-    def __init__(self, p0, v0, pf, vf, T):
-        Segment.__init__(self, T)
+    def __init__(self, p0, v0, pf, vf, T, name=""):
+        Segment.__init__(self, T, name)
         # Precompute the spline parameters.
         self.a = p0
         self.b = v0
@@ -209,8 +210,8 @@ class CubicSpline(Segment):
     
 class QuinticSpline(Segment):
     # Initialize.
-    def __init__(self, p0, v0, a0, pf, vf, af, T):
-        Segment.__init__(self, T)
+    def __init__(self, p0, v0, a0, pf, vf, af, T, name=""):
+        Segment.__init__(self, T, name)
         # Precompute the six spline parameters.
         self.a = p0
         self.b = v0
@@ -232,3 +233,27 @@ class QuinticSpline(Segment):
         elif order == 2:
             a = 2 * self.c + 6 * self.d * t + 12 * self.e * t ** 2 + 20 * self.f * t ** 3
             return a
+        
+class QuinticSplineR(QuinticSpline):
+    # Initialize.
+    def __init__(self, p0, v0, a0, R0, pf, vf, af, Rf, T, name=""):
+        QuinticSpline.__init__(self,  p0, v0, a0, pf, vf, af, T, name)
+        self.R0 = R0
+        self.Rf = Rf
+        (self.axis, self.tot_angle) = axisangle_from_R(R0.T @ Rf)
+
+# reference: http://www.farinhansford.com/gerald/classes/cse570/additions/orientation.pdf
+def axisangle_from_R(R):
+    axis = (R + R.T - (np.trace(R) - 1)*np.eye(3))[0:3, 0]
+    axis = axis / np.linalg.norm(axis)
+    if (np.trace(R) > 2 or np.trace(R) < -2):
+        angle = 0;
+    else:
+        angle = np.arccos((np.trace(R) - 1)/2)
+    return (axis, angle)
+
+def R_from_axisangle(axis, theta):
+    ex = np.array([[     0.0, -float(axis[2]),  axis[1]],
+                   [ axis[2],      0.0, -axis[0]],
+                   [-axis[1],  axis[0],     0.0]])
+    return np.eye(3) + np.sin(theta) * ex + (1.0-np.cos(theta)) * ex @ ex

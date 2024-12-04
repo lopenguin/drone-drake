@@ -40,7 +40,7 @@ if __name__ == '__main__':
     start = np.array([0,0,1.]).reshape([3,1])
     end = np.array([0,0,1.]).reshape([3,1])
     intermediate = np.array([0.,0,1]).reshape([3,1])
-    trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.5,2.])
+    trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.5,3.])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -92,14 +92,14 @@ if __name__ == '__main__':
     # plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
     plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
     # low-level controller
-    arm_controller = builder.AddNamedSystem("arm_controller", Control.TaskController(plant, meshcat))
+    arm_controller = builder.AddNamedSystem("arm_controller", Control.JointController())
     builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.state_input_port)
-    builder.Connect(arm_controller.cmd_output_port, plant.get_actuation_input_port(drone_instance))
+    builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
 
     # trajectory generation
-    arm_traj_system = builder.AddSystem(Traj.ArmTrajectoryPlanner(plant, meshcat, RigidTransform(RotationMatrix(), np.array([0.3, 0., -0.42]))))
+    arm_traj_system = builder.AddSystem(Traj.ArmTrajectoryPlanner2(plant, meshcat))
     builder.Connect(plant.get_state_output_port(drone_instance), arm_traj_system.state_input_port)
-    builder.Connect(arm_traj_system.posevel_output_port, arm_controller.state_d_input_port)
+    builder.Connect(arm_traj_system.joint_output_port, arm_controller.state_d_input_port)
 
     # Add visualizer and build
     diagram = builder.Build()

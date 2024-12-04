@@ -163,26 +163,26 @@ class JointController(LeafSystem):
 
         # inputs/outputs
         # drone quat, drone xyz, q, quatdot, xyzdot, qdot
-        self.input_state_port = self.DeclareVectorInputPort("arm.state_cur", 27)
-        self.input_state_d_port = self.DeclareVectorInputPort("arm.state_des", 21) # q, qdot, qddot
+        self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14)
+        self.state_d_input_port = self.DeclareVectorInputPort("arm.state_des", 21) # q, qdot, qddot
         # we only control velocity
         state_index = self.DeclareContinuousState(7)
         self.output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_index)
 
     def DoCalcTimeDerivatives(self, context, derivatives):
         # current state
-        state = self.input_state_port.Eval(context)
+        state = self.state_input_port.Eval(context)
         q_cur = state[7:14]
         qdot_cur = state[-7:]
 
         # desired state
-        state_d = self.input_state_d_port.Eval(context)
+        state_d = self.state_d_input_port.Eval(context)
         q_d = state_d[:7]
         qdot_d = state_d[7:14]
         qddot_d = state_d[-7:]
 
         # PI control
-        qdot = 10*(q_d - q_cur) + 10.*(qdot_d - qdot_cur)
+        qdot = 100*(q_d - q_cur) + 1000.*(qdot_d - qdot_cur)
         derivatives.get_mutable_vector().SetFromVector(qdot)
 
 
