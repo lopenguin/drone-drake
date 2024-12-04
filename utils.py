@@ -164,21 +164,20 @@ class Segment:
     def evaluate(self, t):
         pass
 
+    def EvalDerivative(self, t, order=1):
+        pass
+
     def get_p0(self):
-        (p0, v0) = self.evaluate(0.0)
-        return p0
+        return self.evaluate(0.0)
 
     def get_v0(self):
-        (p0, v0) = self.evaluate(0.0)
-        return v0
+        return self.EvalDerivative(0.0)
 
     def get_pf(self):
-        (pf, vf) = self.evaluate(self.T)
-        return pf
+        return self.evaluate(self.T)
 
     def get_vf(self):
-        (pf, vf) = self.evaluate(self.T)
-        return vf
+        return self.EvalDerivative(self.T)
 
     def duration(self):
         return self.T

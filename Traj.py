@@ -11,6 +11,7 @@ from pydrake.all import (
     RotationMatrix,
     AbstractValue,
     SpatialVelocity,
+    JacobianWrtVariable,
 )
 
 import utils
@@ -236,6 +237,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             self.make_traj_to_grasp(context)
             self.start_time = t
             print(f"Executing {self.segments[0].name}...")
+            self.draw_target(self.segments[0])
 
         current_segment = self.segments[0]
         # move to next segment if needed
@@ -250,7 +252,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             print(f"Executing {current_segment.name}...")
 
             # draw target position
-            
+            self.draw_target(current_segment)
         
         # execute current segment
         q = current_segment.evaluate(t - self.start_time)
@@ -258,7 +260,16 @@ class ArmTrajectoryPlanner2(LeafSystem):
         q_ddot = current_segment.EvalDerivative(t - self.start_time, 2)
 
         # [x, y, z position, theta angle]
-        if q.shape[0] == 4:
+        if q.shape[0] == 3:
+            p = q
+            p_dot = q_dot
+            p_ddot = q_ddot
+
+            # (differential) inverse kinematics
+            q, q_dot, q_ddot = self.ikin(context, p, p_dot, p_ddot)
+
+        # [x, y, z position, theta angle]
+        elif q.shape[0] == 4:
             p = q[:3]
             p_dot = q_dot[:3]
             p_ddot = q_ddot[:3]
@@ -269,7 +280,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             theta_ddot = current_segment.axis * q_ddot[-1] # check
 
             # (differential) inverse kinematics
-            q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot, R, theta_dot, theta_ddot)
+            q, q_dot, q_ddot = self.ikin(context, p, p_dot, p_ddot, R, theta_dot, theta_ddot)
         elif q.shape[0] != 6:
             print("Unrecognized spline shape:", q.shape)
             input()
@@ -301,28 +312,67 @@ class ArmTrajectoryPlanner2(LeafSystem):
                                 duration, name="initial")
         self.segments.append(s)
         
-        # second joint motion (just for fun)
-        qd2 = np.array([0., -0.5, 1.18, 1.37, 0, 0])
-        duration = 0.5
-        s = utils.QuinticSpline(qd1, np.zeros_like(qd1), np.zeros_like(q0),
-                                qd2, np.zeros_like(qd2), np.zeros_like(qd2),
+        # a task space motion
+        pose_d1 = self.fkin(np.concatenate([qd1, np.zeros(1)]))
+        p_d1 = pose_d1.translation()
+        p_d2 = p_d1 + np.array([0.,0.,0.4])
+        duration = 1.5
+        s = utils.QuinticSpline(p_d1, np.zeros_like(p_d1), np.zeros_like(p_d1),
+                                p_d2, np.array([0.,0.,-0.5]), np.zeros_like(p_d2),
                                 duration, name="fun")
         self.segments.append(s)
 
-        # third joint motion (just for fun)
-        qd3 = np.array([1.36, -0.5, 1.18, 1.37, 0, 0])
-        duration = 0.5
-        s = utils.QuinticSpline(qd2, np.zeros_like(qd2), np.zeros_like(qd2),
-                                qd3, np.zeros_like(qd3), np.zeros_like(qd3),
-                                duration, name="fun2")
-        self.segments.append(s)
+        # # third joint motion (just for fun)
+        # qd3 = np.array([1.36, -0.5, 1.18, 1.37, 0, 0])
+        # duration = 0.5
+        # s = utils.QuinticSpline(qd2, np.zeros_like(qd2), np.zeros_like(qd2),
+        #                         qd3, np.zeros_like(qd3), np.zeros_like(qd3),
+        #                         duration, name="fun2")
+        # self.segments.append(s)
         
-    def ikin(self, p, p_dot, p_ddot, R, theta_dot, theta_ddot):
+    def ikin(self, context, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None):
         """
         returns joint space commands for arm
         TODO
         """
-        pass
+        # get current joint position
+        state = self.state_input_port.Eval(context)
+
+        # forward kinematics
+        pose_cur = self.fkin(state[:7]) # must call before calc jacobian to set positions
+        J = self.plant.CalcJacobianSpatialVelocity(self.virtual_context, JacobianWrtVariable.kQDot,
+                self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
+        # ignore gripper and drone terms
+        J = J[:,:6]
+
+        # velocity only (TODO: use current pose)
+        if R is None:
+            J = J[-3:,:]
+            target_vel = p_dot
+        else:
+            target_vel = np.concatenate([theta_dot, p_dot])
+
+        # Jacobian pinv (TODO: try optimization approach)
+        gam = 0.05
+        J_inv = J.T @ np.linalg.inv(J @ J.T + gam**2 * np.eye(J.shape[0]))
+        q_dot = J_inv @ target_vel
+
+        # discretely integrate to get q
+        q = state[:6] + q_dot*self.plant.time_step()
+
+        q_ddot = np.zeros_like(q)
+
+        return q, q_dot, q_ddot
+    
+    def fkin(self, q, q_dot=None):
+        self.plant.SetPositions(self.virtual_context, self.drone_model, q)
+        pose = self.plant.CalcRelativeTransform(self.virtual_context, self.drone_frame, self.end_effector_frame)
+        if q_dot is None:
+            return pose
+
+        self.plant.SetVelocities(self.virtual_context, self.drone_model, q_dot)
+        vel = self.end_effector_frame.CalcSpatialVelocity(self.virtual_context, self.drone_frame, self.drone_frame)
+        return pose, vel
     
     def terminate(self, context):
         """
@@ -345,3 +395,18 @@ class ArmTrajectoryPlanner2(LeafSystem):
                                 qd, np.zeros_like(qd), np.zeros_like(qd),
                                 100., name="stop")
         self.segments.append(s)
+
+    def draw_target(self, segment: utils.Segment):
+        q = segment.get_pf()
+        if q.shape[0] == 3:
+            # position space
+            pose = RigidTransform(RotationMatrix(), q)
+
+        # [x, y, z position, theta angle]
+        elif q.shape[0] == 4:
+            # se(3)
+            pose = RigidTransform(RotationMatrix(segment.Rf, q[:3]))
+        else:
+            pose = self.fkin(np.concatenate([q, np.zeros(1)]))
+
+        utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/{segment.name}", pose)
