@@ -5,7 +5,7 @@ Simulate the drone and its environment.
 import numpy as np
 
 from pydrake.geometry import StartMeshcat
-from pydrake.multibody.plant import AddMultibodyPlantSceneGraph, ApplyMultibodyPlantConfig, MultibodyPlantConfig, MultibodyPlant
+from pydrake.multibody.plant import AddMultibodyPlantSceneGraph, ApplyMultibodyPlantConfig, MultibodyPlantConfig
 from pydrake.multibody.parsing import Parser
 from pydrake.all import (
     DiagramBuilder,
@@ -13,6 +13,8 @@ from pydrake.all import (
     ProcessModelDirectives,
     MeshcatVisualizer,
     Simulator,
+    RigidTransform,
+    RotationMatrix,
 )
 
 from utils import make_bspline
@@ -95,7 +97,9 @@ if __name__ == '__main__':
     builder.Connect(arm_controller.cmd_output_port, plant.get_actuation_input_port(drone_instance))
 
     # trajectory generation
-    # TODO
+    arm_traj_system = builder.AddSystem(Traj.ArmTrajectoryPlanner(plant, meshcat, RigidTransform(RotationMatrix(), np.array([0.3, 0., -0.42]))))
+    builder.Connect(plant.get_state_output_port(drone_instance), arm_traj_system.state_input_port)
+    builder.Connect(arm_traj_system.posevel_output_port, arm_controller.state_d_input_port)
 
     # Add visualizer and build
     diagram = builder.Build()

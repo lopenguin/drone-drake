@@ -4,7 +4,7 @@ Controllers for the drone and arm
 
 import numpy as np
 
-from pydrake.systems.framework import Context, ContinuousState, LeafSystem
+from pydrake.systems.framework import LeafSystem
 from pydrake.math import RollPitchYaw
 from pydrake.multibody.plant import MultibodyPlant
 from pydrake.all import (
@@ -205,17 +205,19 @@ class TaskController(LeafSystem):
 
         # input: current state
         self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14) # [q, qdot]
+        # input: target pose & velocity
+        self.state_d_input_port = self.DeclareAbstractInputPort("arm.state_des", 
+            AbstractValue.Make([utils.PoseVelocity()]))
 
         # ouput: joint velocity command
         state_idx = self.DeclareContinuousState(7)
         self.cmd_output_port = self.DeclareStateOutputPort("arm.qd_cmd", state_idx)
 
-        # pre-define target pose
-        self.target_position = np.array([0.3, 0., -0.52])
-        utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/target", RigidTransform(RotationMatrix(),self.target_position))
-
         # FOR TESTING
         self.trigger_only_once = True
+
+        # pre-define target pose
+        # self.target_position = np.array([0.3, 0., -0.52])
 
     def DoCalcTimeDerivatives(self, context, derivatives):
         # get current state
@@ -233,12 +235,18 @@ class TaskController(LeafSystem):
         if self.trigger_only_once:
             self.trigger_only_once = False
             self.last_q_des = state[:6]
-            utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/should", RigidTransform(RotationMatrix(),self.target_position))
+            # utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/should", RigidTransform(RotationMatrix(), target_position))
             # self.target_position = pose_cur.translation()
-
+            
+        
+        # update target position
+        target_posevel = self.state_d_input_port.Eval(context)
+        target_position = target_posevel.pose.translation()
+        target_velocity = target_posevel.vel.translational() # TODO: incorporate!
+        # TODO: plot!
 
         # pick spatial velocity to drive towards target position
-        target_vel = 2*(self.target_position - pose_cur.translation())
+        target_vel = 3*(target_position - pose_cur.translation())
 
         # inverse kinematics TODO: replace with opt prob with joint limits
         qd_des = self.DiffIK_WeightPinv(J, target_vel, translation_only=True)

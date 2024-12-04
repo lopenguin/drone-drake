@@ -10,6 +10,7 @@ from pydrake.trajectories import BsplineTrajectory
 from pydrake.all import (
     RigidTransform,
     RotationMatrix,
+    SpatialVelocity,
     Cylinder,
     Rgba,
     Meshcat,
@@ -146,3 +147,88 @@ def plot_ref_frame(meshcat: Meshcat, path, X_PT, length=0.15, radius=0.005, opac
 
 def skew_to_vec(S):
     return np.array([S[2,1], S[0,2], S[1,0]])
+
+class PoseVelocity:
+    def __init__(self, T: RigidTransform = RigidTransform(), v: SpatialVelocity = SpatialVelocity()):
+        self.pose = T
+        self.vel = v
+
+
+## Standard splines
+class Segment:
+    def __init__(self, T):
+        self.T = T
+        pass
+
+    def evaluate(self, t):
+        pass
+
+    def get_p0(self):
+        (p0, v0) = self.evaluate(0.0)
+        return p0
+
+    def get_v0(self):
+        (p0, v0) = self.evaluate(0.0)
+        return v0
+
+    def get_pf(self):
+        (pf, vf) = self.evaluate(self.T)
+        return pf
+
+    def get_vf(self):
+        (pf, vf) = self.evaluate(self.T)
+        return vf
+
+    def duration(self):
+        return self.T
+    
+class CubicSpline(Segment):
+    # Initialize.
+    def __init__(self, p0, v0, pf, vf, T):
+        Segment.__init__(self, T)
+        # Precompute the spline parameters.
+        self.a = p0
+        self.b = v0
+        self.c = 3 * (pf - p0) / T ** 2 - vf / T - 2 * v0 / T
+        self.d = -2 * (pf - p0) / T ** 3 + vf / T ** 2 + v0 / T ** 2
+
+    # Compute the position/velocity for a given time (w.r.t. t=0 start).
+    def evaluate(self, t):
+        # Compute and return the position and velocity.
+        p = self.a + self.b * t + self.c * t ** 2 + self.d * t ** 3
+        return p
+    
+    def EvalDerivative(self, t, order=1):
+        if order == 1:
+            v = self.b + 2 * self.c * t + 3 * self.d * t ** 2
+            return v
+        elif order == 2:
+            a = 2 * self.c + 6 * self.d * t
+            return a
+
+    
+class QuinticSpline(Segment):
+    # Initialize.
+    def __init__(self, p0, v0, a0, pf, vf, af, T):
+        Segment.__init__(self, T)
+        # Precompute the six spline parameters.
+        self.a = p0
+        self.b = v0
+        self.c = a0
+        self.d = -10 * p0 / T ** 3 - 6 * v0 / T ** 2 - 3 * a0 / T + 10 * pf / T ** 3 - 4 * vf / T ** 2 + 0.5 * af / T
+        self.e = 15 * p0 / T ** 4 + 8 * v0 / T ** 3 + 3 * a0 / T ** 2 - 15 * pf / T ** 4 + 7 * vf / T ** 3 - 1 * af / T ** 2
+        self.f = -6 * p0 / T ** 5 - 3 * v0 / T ** 4 - 1 * a0 / T ** 3 + 6 * pf / T ** 5 - 3 * vf / T ** 4 + 0.5 * af / T ** 3
+
+    # Compute the position/velocity for a given time (w.r.t. t=0 start).
+    def evaluate(self, t):
+        # Compute and return the position and velocity.
+        p = self.a + self.b * t + self.c * t ** 2 + self.d * t ** 3 + self.e * t ** 4 + self.f * t ** 5
+        return p
+    
+    def EvalDerivative(self, t, order=1):
+        if order == 1:
+            v = self.b + 2 * self.c * t + 3 * self.d * t ** 2 + 4 * self.e * t ** 3 + 5 * self.f * t ** 4
+            return v
+        elif order == 2:
+            a = 2 * self.c + 6 * self.d * t + 12 * self.e * t ** 2 + 20 * self.f * t ** 3
+            return a
