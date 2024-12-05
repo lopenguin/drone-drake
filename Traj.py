@@ -12,6 +12,7 @@ from pydrake.all import (
     AbstractValue,
     SpatialVelocity,
     JacobianWrtVariable,
+    AngleAxis,
 )
 
 import utils
@@ -205,17 +206,20 @@ State machine for trajectory planner.
 Issues commands in joint space.
 '''
 class ArmTrajectoryPlanner2(LeafSystem):
-    def __init__(self, plant: MultibodyPlant, meshcat):
+    def __init__(self, plant: MultibodyPlant, meshcat, drone_traj):
         LeafSystem.__init__(self)
         
         self.plant = plant
         self.meshcat = meshcat
+        self.drone_traj = drone_traj
 
         # setup for fkin
         self.virtual_context = plant.CreateDefaultContext()
         self.drone_model = plant.GetModelInstanceByName("drone")
+        self.sugar_model = plant.GetModelInstanceByName("sugar_box")
         self.end_effector_frame = plant.GetBodyByName("arm_link_fngr").body_frame()
         self.drone_frame = plant.GetBodyByName("quadrotor_link").body_frame()
+        self.sugar_frame = plant.GetBodyByName("base_link_sugar").body_frame()
 
         # build trajectory
         self.start_time = 0.
@@ -223,7 +227,9 @@ class ArmTrajectoryPlanner2(LeafSystem):
         self.segments = []
 
         # input: current (joint) state
-        self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14) # [q, qdot]
+        self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14 + (7+6)) # [drone quat/xyz, q, drone twist, qdot]
+        # input: current sugar state
+        self.sugar_input_port = self.DeclareVectorInputPort("sugar.state_cur", 7+6)
 
         # output joint port: [q_cmd, qd_cmd, qdd_cmd]
         self.joint_output_port = self.DeclareVectorOutputPort("arm.state_des", 21, self.EvalStateMachine, {self.time_ticket()})
@@ -233,18 +239,37 @@ class ArmTrajectoryPlanner2(LeafSystem):
 
         # get current state
         state = self.state_input_port.Eval(context)
-        self.q_cur = state[:6] # no gripper
+        self.q_cur = state[7:14-1] # no gripper
         self.qdot_cur = state[-7:-1]
-        self.q_gripper = state[6]
+        self.q_gripper = state[13]
         self.qdot_gripper = state[-1]
+        self.state_cur = state
 
         # first time setup
         if len(self.segments) == 0:
             # creates basic segments
-            self.make_traj_to_grasp(context)
+            self.make_traj_to_grasp()
             self.start_time = t
             print(f"Executing {self.segments[0].name}...")
             self.draw_target(self.segments[0])
+
+            # draw grasp
+            self.grasp_pose_sugar_frame = RigidTransform(RotationMatrix(AngleAxis(np.pi,np.array([1.,0.,0.]))), np.array([-0.05,-0.03,0.]))
+            utils.plot_ref_frame(self.meshcat, "visualizer/sugar_box/base_link_sugar/grasp", self.grasp_pose_sugar_frame)
+            # TODO:
+            # convert grasp frame to drone frame AT TIME OF GRASP
+            # get velocity of grasp frame in drone frame AT TIME OF GRASP
+            self.not_drawn = True
+
+        # TEMP: draw grasp
+        if t > 3.510 and self.not_drawn:
+            self.not_drawn = False
+            state_sugar = self.sugar_input_port.Eval(context)
+            self.plant.SetPositions (self.virtual_context, self.sugar_model, state_sugar[:7])
+            self.plant.SetPositions (self.virtual_context, self.drone_model, np.concatenate([self.state_cur[:7], self.q_cur, np.array([self.q_gripper])]))
+            self.plant.SetVelocities(self.virtual_context, self.drone_model, np.concatenate([self.state_cur[14:20], self.qdot_cur, np.array([self.qdot_gripper])]))
+            X_DS = self.plant.CalcRelativeTransform(self.virtual_context, self.drone_frame, self.sugar_frame)
+            utils.plot_ref_frame(self.meshcat, "visualizer/drone/quadrotor_link/grasp", X_DS @ self.grasp_pose_sugar_frame)
 
         current_segment = self.segments[0]
         # move to next segment if needed
@@ -301,7 +326,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         # send command to joint controller
         output.set_value(np.concatenate((q, q_dot, q_ddot)))
 
-    def make_traj_to_grasp(self, context):
+    def make_traj_to_grasp(self):
         """
         Defines a list of segments to grasp object,
         can mix joint space and task space commands (ikin is handled in state machine)
@@ -311,18 +336,51 @@ class ArmTrajectoryPlanner2(LeafSystem):
         q0 = self.q_cur
         q0_dot = self.qdot_cur
         
-        # inital joint motion
-        qd1 = np.array([0., -1.16, 1.18, 1.37, 0, 0])
+        # inital joint motions
+        qd0 = np.array([0., -2.63, 2.89, 0., 0., 0.])
         duration = 1.0
         s = utils.QuinticSpline(q0, q0_dot, np.zeros_like(q0),
-                                qd1, np.zeros_like(qd1), np.zeros_like(qd1),
+                                qd0, np.zeros_like(qd0), np.zeros_like(qd0),
                                 duration, name="initial")
+        self.segments.append(s)
+        qd1 = np.array([0., -2.63, 2.89, 0., 0., 0.])
+        duration = 0.5
+        s = utils.QuinticSpline(qd0, np.zeros_like(qd0), np.zeros_like(qd0),
+                                qd1, np.zeros_like(qd1), np.zeros_like(qd1),
+                                duration, name="initial hold")
+        self.segments.append(s)
+
+        # test for grasping
+        qd2 = np.array([-0.13, -2.63, 2, 0.22, 0.46, -1.83])
+        duration = 0.5
+        s = utils.QuinticSpline(qd1, np.zeros_like(qd1), np.zeros_like(qd1),
+                                qd2, np.zeros_like(qd2), np.zeros_like(qd2),
+                                duration, name="grasp")
+        self.segments.append(s)
+
+    def make_demo_traj(self):
+        # get current joint position
+        q0 = self.q_cur
+        q0_dot = self.qdot_cur
+        
+        # inital joint motions
+        qd0 = np.array([0., -2.63, 2.89, 0., 0., 0.])
+        duration = 1.0
+        s = utils.QuinticSpline(q0, q0_dot, np.zeros_like(q0),
+                                qd0, np.zeros_like(qd0), np.zeros_like(qd0),
+                                duration, name="initial")
+        self.segments.append(s)
+        qd1 = np.array([0., -2.63, 2.89, 0., 0., 0.])
+        duration = 0.5
+        s = utils.QuinticSpline(qd0, np.zeros_like(qd0), np.zeros_like(qd0),
+                                qd1, np.zeros_like(qd1), np.zeros_like(qd1),
+                                duration, name="initial hold")
         self.segments.append(s)
         
         # a position-only task space motion
         pose_d1 = self.fkin(np.append(qd1, 0.))
         p_d1 = pose_d1.translation()
-        p_d2 = p_d1 + np.array([0.,0.,0.4])
+        p_d2 = p_d1 + np.array([0.,0.,-0.3])
         duration = 1.0
         s = utils.QuinticSpline(p_d1, np.zeros_like(p_d1), np.zeros_like(p_d1),
                                 p_d2, np.array([0.,0.,-0.5]), np.zeros_like(p_d2),
@@ -335,7 +393,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         duration = 1.0
         c = utils.SegmentConstructor("pose", duration,
                 delta_p_d3, np.zeros_like(delta_p_d3), np.zeros_like(delta_p_d3), delta=[True, False],
-                Rf=np.eye(3), delta_R=True, name="whole")
+                Rf=Rf3, delta_R=True, name="whole")
         self.segments.append(c)
         
     def ikin(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None):
@@ -348,7 +406,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         J = self.plant.CalcJacobianSpatialVelocity(self.virtual_context, JacobianWrtVariable.kQDot,
                 self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
         # ignore gripper and drone terms
-        J = J[:,:6]
+        J = J[:,7:14-1]
 
         # velocity only (TODO: use current pose)
         if R is None:
@@ -370,11 +428,13 @@ class ArmTrajectoryPlanner2(LeafSystem):
         return q, q_dot, q_ddot
     
     def fkin(self, q, q_dot=None):
+        q = np.concatenate([self.state_cur[:7], q])
         self.plant.SetPositions(self.virtual_context, self.drone_model, q)
         pose = self.plant.CalcRelativeTransform(self.virtual_context, self.drone_frame, self.end_effector_frame)
         if q_dot is None:
             return pose
 
+        q_dot = np.concatenate([self.state_cur[14:20], q_dot])
         self.plant.SetVelocities(self.virtual_context, self.drone_model, q_dot)
         vel = self.end_effector_frame.CalcSpatialVelocity(self.virtual_context, self.drone_frame, self.drone_frame)
         return pose, vel

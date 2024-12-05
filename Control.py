@@ -163,7 +163,7 @@ class JointController(LeafSystem):
 
         # inputs/outputs
         # drone quat, drone xyz, q, quatdot, xyzdot, qdot
-        self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14)
+        self.state_input_port = self.DeclareVectorInputPort("arm.state_cur", 14 + (7+6))
         self.state_d_input_port = self.DeclareVectorInputPort("arm.state_des", 21) # q, qdot, qddot
         # we only control velocity
         state_index = self.DeclareContinuousState(7)

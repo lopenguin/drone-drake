@@ -13,8 +13,6 @@ from pydrake.all import (
     ProcessModelDirectives,
     MeshcatVisualizer,
     Simulator,
-    RigidTransform,
-    RotationMatrix,
 )
 
 from utils import make_bspline
@@ -32,15 +30,15 @@ def save_diagram(diagram):
 if __name__ == '__main__':
     ## Basic drone trajectory
     # in poses
-    # start = np.array([-1.5,0,1.]).reshape([3,1])
-    # end = np.array([1.5,0,1.]).reshape([3,1])
-    # intermediate = np.array([0.,0,-0.5]).reshape([3,1])
-    # trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+    start = np.array([-1.5,0,1.]).reshape([3,1])
+    end = np.array([1.5,0,1.]).reshape([3,1])
+    intermediate = np.array([0.,0,-0.5]).reshape([3,1])
+    trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
 
-    start = np.array([0,0,1.]).reshape([3,1])
-    end = np.array([0,0,1.]).reshape([3,1])
-    intermediate = np.array([0.,0,1]).reshape([3,1])
-    trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.5,3.])
+    # start = np.array([0,0,1.]).reshape([3,1])
+    # end = np.array([0,0,1.]).reshape([3,1])
+    # intermediate = np.array([0.,0,1]).reshape([3,1])
+    # trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.5,3.])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -84,6 +82,7 @@ if __name__ == '__main__':
 
     ## Arm
     drone_instance = plant.GetModelInstanceByName("drone")
+    sugar_instance = plant.GetModelInstanceByName("sugar_box")
     # plant.GetJointByName("arm_sh0").set_position_limits([-np.inf],[np.inf])
     # plant.GetJointByName("arm_sh1").set_position_limits([-np.inf],[np.inf])
     # plant.GetJointByName("arm_el0").set_position_limits([-np.inf],[np.inf])
@@ -97,8 +96,9 @@ if __name__ == '__main__':
     builder.Connect(arm_controller.output_port, plant.get_actuation_input_port(drone_instance))
 
     # trajectory generation
-    arm_traj_system = builder.AddSystem(Traj.ArmTrajectoryPlanner2(plant, meshcat))
+    arm_traj_system = builder.AddSystem(Traj.ArmTrajectoryPlanner2(plant, meshcat, trajectory))
     builder.Connect(plant.get_state_output_port(drone_instance), arm_traj_system.state_input_port)
+    builder.Connect(plant.get_state_output_port(sugar_instance), arm_traj_system.sugar_input_port)
     builder.Connect(arm_traj_system.joint_output_port, arm_controller.state_d_input_port)
 
     # Add visualizer and build
