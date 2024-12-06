@@ -83,12 +83,12 @@ if __name__ == '__main__':
     ## Arm
     drone_instance = plant.GetModelInstanceByName("drone")
     sugar_instance = plant.GetModelInstanceByName("sugar_box")
-    # plant.GetJointByName("arm_sh0").set_position_limits([-np.inf],[np.inf])
-    # plant.GetJointByName("arm_sh1").set_position_limits([-np.inf],[np.inf])
-    # plant.GetJointByName("arm_el0").set_position_limits([-np.inf],[np.inf])
-    # plant.GetJointByName("arm_el1").set_position_limits([-np.inf],[np.inf])
-    # plant.GetJointByName("arm_wr0").set_position_limits([-np.inf],[np.inf])
-    # plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_sh0").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_sh1").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_el0").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_el1").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_wr0").set_position_limits([-np.inf],[np.inf])
+    plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
     plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
     # low-level controller
     arm_controller = builder.AddNamedSystem("arm_controller", Control.JointController())

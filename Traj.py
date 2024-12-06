@@ -13,6 +13,7 @@ from pydrake.all import (
     SpatialVelocity,
     JacobianWrtVariable,
     AngleAxis,
+    RollPitchYaw,
 )
 
 import utils
@@ -248,28 +249,42 @@ class ArmTrajectoryPlanner2(LeafSystem):
         # first time setup
         if len(self.segments) == 0:
             # creates basic segments
-            self.make_traj_to_grasp()
+            self.make_initial_traj()
             self.start_time = t
             print(f"Executing {self.segments[0].name}...")
             self.draw_target(self.segments[0])
 
             # draw grasp
-            self.grasp_pose_sugar_frame = RigidTransform(RotationMatrix(AngleAxis(np.pi,np.array([1.,0.,0.]))), np.array([-0.05,-0.03,0.]))
+            side_grasp = RigidTransform(RotationMatrix(AngleAxis(np.pi,np.array([1.,0.,0.]))), np.array([-0.05,-0.03,0.]))
+            top_grasp  = RigidTransform(RotationMatrix(np.array([[0, 1, 0], [0, 0, -1], [-1, 0, 0]]).T), np.array([0.,-0.09,0.]))
+            self.grasp_pose_sugar_frame = side_grasp
             utils.plot_ref_frame(self.meshcat, "visualizer/sugar_box/base_link_sugar/grasp", self.grasp_pose_sugar_frame)
             # TODO:
             # convert grasp frame to drone frame AT TIME OF GRASP
             # get velocity of grasp frame in drone frame AT TIME OF GRASP
             self.not_drawn = True
+            self.do_first_calc = True
+
+        # allow 1 second for world to settle then make (static) plan
+        if t > 1. and self.do_first_calc:
+            self.do_first_calc = False
+            t_grasp = 3.515
+            self.make_static_plan(context, t_grasp)
 
         # TEMP: draw grasp
         if t > 3.510 and self.not_drawn:
             self.not_drawn = False
             state_sugar = self.sugar_input_port.Eval(context)
-            self.plant.SetPositions (self.virtual_context, self.sugar_model, state_sugar[:7])
+            self.plant.SetPositionsAndVelocities(self.virtual_context, self.sugar_model, state_sugar)
             self.plant.SetPositions (self.virtual_context, self.drone_model, np.concatenate([self.state_cur[:7], self.q_cur, np.array([self.q_gripper])]))
             self.plant.SetVelocities(self.virtual_context, self.drone_model, np.concatenate([self.state_cur[14:20], self.qdot_cur, np.array([self.qdot_gripper])]))
             X_DS = self.plant.CalcRelativeTransform(self.virtual_context, self.drone_frame, self.sugar_frame)
-            utils.plot_ref_frame(self.meshcat, "visualizer/drone/quadrotor_link/grasp", X_DS @ self.grasp_pose_sugar_frame)
+            # pose of grasp in quadrotor frame
+            X_DG = X_DS @ self.grasp_pose_sugar_frame
+            # velocity of grasp in quadrotor frame
+            vel = self.sugar_frame.CalcSpatialVelocity(self.virtual_context, self.drone_frame, self.drone_frame)
+
+            utils.plot_ref_frame(self.meshcat, "visualizer/drone/quadrotor_link/true_grasp", X_DG)
 
         current_segment = self.segments[0]
         # move to next segment if needed
@@ -326,7 +341,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         # send command to joint controller
         output.set_value(np.concatenate((q, q_dot, q_ddot)))
 
-    def make_traj_to_grasp(self):
+    def make_initial_traj(self):
         """
         Defines a list of segments to grasp object,
         can mix joint space and task space commands (ikin is handled in state machine)
@@ -337,25 +352,17 @@ class ArmTrajectoryPlanner2(LeafSystem):
         q0_dot = self.qdot_cur
         
         # inital joint motions
-        qd0 = np.array([0., -2.63, 2.89, 0., 0., 0.])
+        qd0 = np.array([0., -2.63, 1.18, 0., 0., 0.])
         duration = 1.0
         s = utils.QuinticSpline(q0, q0_dot, np.zeros_like(q0),
                                 qd0, np.zeros_like(qd0), np.zeros_like(qd0),
                                 duration, name="initial")
         self.segments.append(s)
-        qd1 = np.array([0., -2.63, 2.89, 0., 0., 0.])
+        qd1 = np.array([0., -2.63, 1.18, 0., 0., 0.])
         duration = 0.5
         s = utils.QuinticSpline(qd0, np.zeros_like(qd0), np.zeros_like(qd0),
                                 qd1, np.zeros_like(qd1), np.zeros_like(qd1),
                                 duration, name="initial hold")
-        self.segments.append(s)
-
-        # test for grasping
-        qd2 = np.array([-0.13, -2.63, 2, 0.22, 0.46, -1.83])
-        duration = 0.5
-        s = utils.QuinticSpline(qd1, np.zeros_like(qd1), np.zeros_like(qd1),
-                                qd2, np.zeros_like(qd2), np.zeros_like(qd2),
-                                duration, name="grasp")
         self.segments.append(s)
 
     def make_demo_traj(self):
@@ -426,6 +433,9 @@ class ArmTrajectoryPlanner2(LeafSystem):
         q_ddot = np.zeros_like(q)
 
         return q, q_dot, q_ddot
+    
+    def ikin2(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None):
+        pass
     
     def fkin(self, q, q_dot=None):
         q = np.concatenate([self.state_cur[:7], q])
@@ -512,3 +522,41 @@ class ArmTrajectoryPlanner2(LeafSystem):
             pose = self.fkin(np.append(q, 0.))
 
         utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/{segment.name}", pose)
+
+    def make_static_plan(self, context, t_grasp):
+        # simulate world at time of grasp
+        # assume sugar box is static
+        state_sugar = self.sugar_input_port.Eval(context)
+        self.plant.SetPositionsAndVelocities(self.virtual_context, self.sugar_model, state_sugar)
+
+        # figure out drone state at time of grasp using diff flatness
+        q = np.squeeze(self.drone_traj.value(t_grasp)) # x y z
+        q_dot = np.squeeze(self.drone_traj.EvalDerivative(t_grasp))
+        q_ddot = np.squeeze(self.drone_traj.EvalDerivative(t_grasp, 2))
+        fz = np.sqrt(q_ddot[0]**2 + q_ddot[1]**2 + (q_ddot[2] + 9.81)**2)
+        r = np.arcsin(-q_ddot[1]/fz)
+        p = np.arcsin(q_ddot[0]/fz)
+        # assume yaw = 0
+        quat = RollPitchYaw(np.array([r, p, 0.])).ToQuaternion()
+        quat = quat.wxyz()
+        # for now, w = 0
+        state_drone = np.concatenate([quat, q, np.zeros(7), np.zeros(3), q_dot, np.zeros(7)])
+        self.plant.SetPositionsAndVelocities(self.virtual_context, self.drone_model, state_drone)
+
+        # get grasp pose and velocity
+        X_DS = self.plant.CalcRelativeTransform(self.virtual_context, self.drone_frame, self.sugar_frame)
+        # pose of grasp in quadrotor frame
+        X_DG = X_DS @ self.grasp_pose_sugar_frame
+        # velocity of grasp in quadrotor frame
+        vel = self.sugar_frame.CalcSpatialVelocity(self.virtual_context, self.drone_frame, self.drone_frame)
+
+        # add segment to reach pose and velocity at t_grasp
+        t_start = 0.
+        for s in self.segments:
+            t_start += s.T
+        
+        duration = t_grasp - t_start - self.start_time
+        c = utils.SegmentConstructor("pose", duration,
+                X_DG.translation(), vel.translational(), np.zeros(3), delta=[False, False],
+                Rf=X_DG.rotation().matrix(), delta_R=False, name="grasp")
+        self.segments.append(c)

@@ -15,7 +15,7 @@ directives:
 
     - add_model:
         name: drone
-        file: package://aerial_grasping/assets/skydio_2/quadrotor_arm.urdf
+        file: package://aerial_grasping/assets/skydio_2/quadrotor_arm_no_collisions.urdf
         default_free_body_pose:
             quadrotor_link:
                 # translation: [0.25,0.,0.8]
