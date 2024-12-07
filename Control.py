@@ -42,6 +42,9 @@ class DroneRotorController(LeafSystem):
         self.output_port = self.DeclareAbstractOutputPort("drone.rotor_force",
             lambda: AbstractValue.Make([ExternallyAppliedSpatialForce()]), self.CalcRotorForces)
         
+        # input: sugar box/grasped object (for changing mass properties once contact established)
+        self.input_grasped_port = self.DeclareVectorInputPort("drone.grasped", 1)
+        
         # make a context for the controller
         self.plant_context = plant.CreateDefaultContext()
         
@@ -90,16 +93,32 @@ class DroneRotorController(LeafSystem):
                 utils.plot_ref_frame(self.meshcat, f"traj_{context.get_time()}", X_DW_desired)
                 self.last_time = context.get_time()
 
+        ## get sugar box contact
+        grasped = self.input_grasped_port.Eval(context)
+        if grasped[0] > 1:
+            sugar_instance = self.plant.GetModelInstanceByName("sugar_box")
+            models = [drone_instance, sugar_instance]
+            drone_bodies.append(self.plant.GetBodyByName("base_link_sugar").index())
+            # gains
+            # original: 16, 5.6, 9, 2.5
+            Kp = 60.
+            Kv = 6.6
+            Kr = 91.
+            Kw = 1.5
+        else:
+            models = [drone_instance]
+            # gains
+            # original: 16, 5.6, 9, 2.5
+            Kp = 50.
+            Kv = 5.6
+            Kr = 91.
+            Kw = 1.5
+
+
         ## geometric controller
         # based on https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=5717652
-        # gains
-        # original: 16, 5.6, 9, 2.5
-        Kp = 50.
-        Kv = 5.6
-        Kr = 91.
-        Kw = 1.5
         # drone properties
-        mass = self.plant.CalcTotalMass(self.plant_context, [drone_instance])
+        mass = self.plant.CalcTotalMass(self.plant_context, models)
         J = self.plant.CalcSpatialInertia(self.plant_context,self.plant.GetFrameByName("quadrotor_link"),drone_bodies).CalcRotationalInertia().CopyToFullMatrix3()
         g = 9.807 # TODO: get from drake?
         
@@ -127,7 +146,7 @@ class DroneRotorController(LeafSystem):
         t = -Kr * eR - Kw * ew + np.cross(omega_cur, J @ omega_cur)
 
         # force command per motor
-        mass_center = self.plant.CalcCenterOfMassPositionInWorld(self.plant_context, [drone_instance])
+        mass_center = self.plant.CalcCenterOfMassPositionInWorld(self.plant_context, models)
 
         # send forces to simulator
         rotor_forces = []

@@ -237,6 +237,12 @@ class ArmTrajectoryPlanner2(LeafSystem):
 
         # output joint port: [q_cmd, qd_cmd, qdd_cmd]
         self.joint_output_port = self.DeclareVectorOutputPort("arm.state_des", 21, self.EvalStateMachine, {self.time_ticket()})
+        # output: is grasp complete?
+        self.grasped_output_port = self.DeclareVectorOutputPort("drone.grasped", 1, self.CheckGrasped)
+        self.grasped = False
+
+    def CheckGrasped(self, context, output):
+        output.set_value(np.array([2*self.grasped]))
 
     def EvalStateMachine(self, context, output):
         t = context.get_time() - 1e-4
@@ -268,7 +274,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             # get velocity of grasp frame in drone frame AT TIME OF GRASP
             self.not_drawn = True
             self.do_first_calc = True
-            self.grasped = False
+            self.gripper_opened_time = 1000
 
         # allow 1 second for world to settle then make (static) plan
         if t > 1. and self.do_first_calc:
@@ -352,11 +358,14 @@ class ArmTrajectoryPlanner2(LeafSystem):
         X_EG = X_ES @ X_SG
 
             
-        if (np.linalg.norm(X_EG.translation()) < 0.5) and not self.grasped:
+        if (np.linalg.norm(X_EG.translation()) < 0.5) and self.gripper_opened_time > t:
             gripper_q = -1.5
             gripper_qdot = -15
-        if (np.linalg.norm(X_EG.translation()) < 0.14):
-            gripper_qdot = 50 * np.linalg.norm(X_EG.translation())/ 0.14
+        if (np.linalg.norm(X_EG.translation()) < 0.12):
+            gripper_qdot = 50 * np.linalg.norm(X_EG.translation())/ 0.12
+            if self.gripper_opened_time > t:
+                self.gripper_opened_time = t
+        if ((t - self.gripper_opened_time) > 0.25) and not self.grasped:
             self.grasped = True
 
 
@@ -672,8 +681,24 @@ class ArmTrajectoryPlanner2(LeafSystem):
         # ignore x-axis rotation
         self.segments.append(c)
 
+        # duration = 0.25
+        # s = utils.QuinticSpline(p_grasp, vel.translational(), final_accel,
+        #                         p_grasp, np.zeros(3), np.zeros(3),
+        #                         duration, name="post grasp hold")
+        # self.segments.append(s)
+        # duration = 0.75
+        # s = utils.QuinticSpline(p_grasp, np.zeros(3), np.zeros(3),
+        #                         p_grasp + np.array([0.,0.,0.1]), np.zeros(3), np.zeros(3),
+        #                         duration, name="raise")
+        # self.segments.append(s)
+
         duration = 0.5
         s = utils.QuinticSpline(p_grasp, vel.translational(), final_accel,
-                                p_grasp, np.zeros(3), np.zeros(3),
-                                duration, name="post_grasp")
+                                p_grasp + np.array([0.,0.,0.05]), np.zeros(3), np.zeros(3),
+                                duration, name="post grasp raise")
         self.segments.append(s)
+        # duration = 0.75
+        # s = utils.QuinticSpline(p_grasp, np.zeros(3), np.zeros(3),
+        #                         p_grasp + np.array([0.,0.,0.1]), np.zeros(3), np.zeros(3),
+        #                         duration, name="raise")
+        # self.segments.append(s)

@@ -34,7 +34,7 @@ if __name__ == '__main__':
     # in poses
     start = np.array([-1.5,0,1.]).reshape([3,1])
     end = np.array([1.5,0,1.]).reshape([3,1])
-    intermediate = np.array([0.,0,-0.5]).reshape([3,1])
+    intermediate = np.array([0.,0,-0.6]).reshape([3,1])
     trajectory = make_bspline(start, end, intermediate,[1.,2,4,5.])
 
     # start = np.array([0,0,1.]).reshape([3,1])
@@ -76,7 +76,7 @@ if __name__ == '__main__':
 
     ## Drone
     # low-level controller
-    drone_controller = builder.AddNamedSystem("drone_controller", Control.DroneRotorController(plant, meshcat, plot_traj=False))
+    drone_controller = builder.AddNamedSystem("drone_controller", Control.DroneRotorController(plant, meshcat, plot_traj=True))
     builder.Connect(plant.get_body_poses_output_port(), drone_controller.input_poses_port)
     builder.Connect(plant.get_body_spatial_velocities_output_port(), drone_controller.input_vels_port)
     builder.Connect(drone_controller.output_port, plant.get_applied_spatial_force_input_port())
@@ -105,6 +105,7 @@ if __name__ == '__main__':
     builder.Connect(plant.get_state_output_port(drone_instance), arm_traj_system.state_input_port)
     builder.Connect(plant.get_state_output_port(sugar_instance), arm_traj_system.sugar_input_port)
     builder.Connect(arm_traj_system.joint_output_port, arm_controller.state_d_input_port)
+    builder.Connect(arm_traj_system.grasped_output_port, drone_controller.input_grasped_port)
 
     # Add visualizer and build
     diagram = builder.Build()
