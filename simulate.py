@@ -33,7 +33,7 @@ if __name__ == '__main__':
     start = np.array([-1.5,0,1.]).reshape([3,1])
     end = np.array([1.5,0,1.]).reshape([3,1])
     intermediate = np.array([0.,0,-0.5]).reshape([3,1])
-    trajectory = make_bspline(start, end, intermediate,[1.,3,4,5.])
+    trajectory = make_bspline(start, end, intermediate,[1.,2,4,5.])
 
     # start = np.array([0,0,1.]).reshape([3,1])
     # end = np.array([0,0,1.]).reshape([3,1])
@@ -49,7 +49,7 @@ if __name__ == '__main__':
     model_directive_file = "default_directive.yaml"
     plant_config = MultibodyPlantConfig(
         time_step = sim_time_step,
-        contact_model = "point", # TODO: switch to hydroelastic (much slower)
+        contact_model = "hydroelastic", # TODO: switch to hydroelastic (much slower)
         discrete_contact_approximation = "sap"
     )
 
@@ -83,13 +83,13 @@ if __name__ == '__main__':
     ## Arm
     drone_instance = plant.GetModelInstanceByName("drone")
     sugar_instance = plant.GetModelInstanceByName("sugar_box")
-    plant.GetJointByName("arm_sh0").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_sh1").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_el0").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_el1").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_wr0").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
-    plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
+    # plant.GetJointByName("arm_sh0").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_sh1").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_el0").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_el1").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_wr0").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_wr1").set_position_limits([-np.inf],[np.inf])
+    # plant.GetJointByName("arm_f1x").set_position_limits([-0.],[0.])
     # low-level controller
     arm_controller = builder.AddNamedSystem("arm_controller", Control.JointController())
     builder.Connect(plant.get_state_output_port(drone_instance), arm_controller.state_input_port)

@@ -267,11 +267,12 @@ class ArmTrajectoryPlanner2(LeafSystem):
             # get velocity of grasp frame in drone frame AT TIME OF GRASP
             self.not_drawn = True
             self.do_first_calc = True
+            self.grasped = False
 
         # allow 1 second for world to settle then make (static) plan
         if t > 1. and self.do_first_calc:
             self.do_first_calc = False
-            t_grasp = 3.515
+            t_grasp = 3.2
             self.make_static_plan(context, t_grasp)
 
         # TEMP: draw grasp
@@ -337,9 +338,30 @@ class ArmTrajectoryPlanner2(LeafSystem):
             input()
 
         # add gripper command
-        q = np.append(q, 0.)
-        q_dot = np.append(q_dot, 0.)
-        q_ddot = np.append(q_ddot, 0.)
+        gripper_q = 0.
+        gripper_qdot = 0.
+        gripper_qddot = 0.
+
+        # distance threshold to open gripper
+        state_sugar = self.sugar_input_port.Eval(context)
+        self.plant.SetPositionsAndVelocities(self.virtual_context, self.sugar_model, state_sugar)
+        self.fkin(np.append(self.q_cur, self.q_gripper))
+        X_DS = self.plant.CalcRelativeTransform(self.virtual_context, self.end_effector_frame, self.sugar_frame)
+            
+        if (np.linalg.norm(X_DS.translation()) < 0.5) and not self.grasped:
+            gripper_q = -1.5
+            gripper_qdot = -15
+        if (np.linalg.norm(X_DS.translation()) < 0.1):
+            gripper_qdot = 50 * np.linalg.norm(X_DS.translation())/ 0.1
+            self.grasped = True
+            print("CLOSE")
+
+
+
+        # append gripper
+        q = np.append(q, gripper_q)
+        q_dot = np.append(q_dot, gripper_qdot)
+        q_ddot = np.append(q_ddot, gripper_qddot)
 
         # send command to joint controller
         output.set_value(np.concatenate((q, q_dot, q_ddot)))
@@ -355,13 +377,17 @@ class ArmTrajectoryPlanner2(LeafSystem):
         q0_dot = self.qdot_cur
         
         # inital joint motions
-        qd0 = np.array([0., -2.63, 1.18, 0., 0., 0.])
+        # qd0 = np.array([0., -2.63, 1.18, 0., 0., 0.])
+        qd0 = np.array([0., -1.84, 1.46, 0, 0.5, 1.41])
+        # qd0 = np.array([0.,-1.68,0.57,-1.47,0,-0.15])
         duration = 1.0
         s = utils.QuinticSpline(q0, q0_dot, np.zeros_like(q0),
                                 qd0, np.zeros_like(qd0), np.zeros_like(qd0),
                                 duration, name="initial")
         self.segments.append(s)
-        qd1 = np.array([0., -2.63, 1.18, 0., 0., 0.])
+        # qd1 = np.array([0., -2.63, 1.18, 0., 0., 0.])
+        qd1 = np.array([0., -1.84, 1.46, 0, 0.5, 1.41])
+        # qd1 = np.array([0.,-1.68,0.57,-1.47,0,-0.15])
         duration = 0.5
         s = utils.QuinticSpline(qd0, np.zeros_like(qd0), np.zeros_like(qd0),
                                 qd1, np.zeros_like(qd1), np.zeros_like(qd1),
@@ -488,7 +514,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         prog.AddBoundingBoxConstraint((lower - self.q_cur)/(N*self.plant.time_step()),
                                       (upper - self.q_cur)/(N*self.plant.time_step()), v)
 
-        # constraint: joint velocities
+        # # constraint: joint velocities
         v_max = 5.
         prog.AddBoundingBoxConstraint(-v_max, v_max, v)
 
@@ -628,16 +654,18 @@ class ArmTrajectoryPlanner2(LeafSystem):
             t_start += s.T
 
         # TODO: probably should remove this eventually
-        final_accel = 10.0 * vel.translational() / np.linalg.norm(vel.translational())
+        final_accel = 3.0 * vel.translational() / np.linalg.norm(vel.translational())
+        # TODO: DEFINITELY should remove this eventually
+        p_grasp = X_DG.translation() + np.array([0.,0.010,0])
         
-        duration = t_grasp - t_start - self.start_time
-        c = utils.SegmentConstructor("pose", duration,
-                X_DG.translation(), vel.translational(), final_accel, delta=[False, False],
+        duration = t_grasp - t_start - self.start_time - 1e-1
+        c = utils.SegmentConstructor("position", duration,
+                p_grasp, vel.translational(), final_accel, delta=[False, False],
                 Rf=X_DG.rotation().matrix(), delta_R=False, name="grasp")
         self.segments.append(c)
 
         duration = 0.5
-        s = utils.QuinticSpline(X_DG.translation(), vel.translational(), final_accel,
-                                X_DG.translation(), np.zeros(3), np.zeros(3),
+        s = utils.QuinticSpline(p_grasp, vel.translational(), final_accel,
+                                p_grasp, np.zeros(3), np.zeros(3),
                                 duration, name="post_grasp")
         self.segments.append(s)
