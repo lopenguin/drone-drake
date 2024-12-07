@@ -262,6 +262,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             top_grasp  = RigidTransform(RotationMatrix(np.array([[0, 1, 0], [1, 0, 0], [0, 0, -1]]).T), np.array([0.,-0.09,0.]))
             self.grasp_pose_sugar_frame = side_grasp
             utils.plot_ref_frame(self.meshcat, "visualizer/sugar_box/base_link_sugar/grasp", self.grasp_pose_sugar_frame)
+            utils.plot_ref_frame(self.meshcat, "visualizer/drone/quadrotor_link/home", RigidTransform())
             # TODO:
             # convert grasp frame to drone frame AT TIME OF GRASP
             # get velocity of grasp frame in drone frame AT TIME OF GRASP
@@ -332,7 +333,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             theta_ddot = current_segment.axis * q_ddot[-1] # check
 
             # (differential) inverse kinematics
-            q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot, R, theta_dot, theta_ddot)
+            q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot, R, theta_dot, theta_ddot, rot_axes=current_segment.rot_axes)
         elif q.shape[0] != 6:
             print("Unrecognized spline shape:", q.shape)
             input()
@@ -346,15 +347,17 @@ class ArmTrajectoryPlanner2(LeafSystem):
         state_sugar = self.sugar_input_port.Eval(context)
         self.plant.SetPositionsAndVelocities(self.virtual_context, self.sugar_model, state_sugar)
         self.fkin(np.append(self.q_cur, self.q_gripper))
-        X_DS = self.plant.CalcRelativeTransform(self.virtual_context, self.end_effector_frame, self.sugar_frame)
+        X_ES = self.plant.CalcRelativeTransform(self.virtual_context, self.end_effector_frame, self.sugar_frame) # world frame
+        X_SG = self.grasp_pose_sugar_frame
+        X_EG = X_ES @ X_SG
+
             
-        if (np.linalg.norm(X_DS.translation()) < 0.5) and not self.grasped:
+        if (np.linalg.norm(X_EG.translation()) < 0.5) and not self.grasped:
             gripper_q = -1.5
             gripper_qdot = -15
-        if (np.linalg.norm(X_DS.translation()) < 0.1):
-            gripper_qdot = 50 * np.linalg.norm(X_DS.translation())/ 0.1
+        if (np.linalg.norm(X_EG.translation()) < 0.14):
+            gripper_qdot = 50 * np.linalg.norm(X_EG.translation())/ 0.14
             self.grasped = True
-            print("CLOSE")
 
 
 
@@ -432,7 +435,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
                 Rf=Rf3, delta_R=True, name="whole")
         self.segments.append(c)
         
-    def ikin(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None):
+    def ikin2(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None, rot_axes=[0,1,2]):
         """
         returns joint space commands for arm
         TODO
@@ -443,13 +446,15 @@ class ArmTrajectoryPlanner2(LeafSystem):
                 self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
         # ignore gripper and drone terms
         J = J[:,7:14-1]
+        # ignore specified rot axes
+        J = J[rot_axes + [3,4,5],:]
 
         # velocity only (TODO: use current pose)
         if R is None:
             J = J[-3:,:]
             target_vel = p_dot
         else:
-            target_vel = np.concatenate([theta_dot, p_dot])
+            target_vel = np.concatenate([theta_dot[rot_axes], p_dot])
 
         # Jacobian pinv (TODO: try optimization approach)
         gam = 0.05
@@ -463,20 +468,22 @@ class ArmTrajectoryPlanner2(LeafSystem):
 
         return q, q_dot, q_ddot
     
-    def ikin2(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None):
+    def ikin(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None, rot_axes=[0,1,2]):
         # forward kinematics
         pose_cur = self.fkin(np.append(self.q_cur, self.q_gripper)) # must call before calc jacobian to set positions
         J = self.plant.CalcJacobianSpatialVelocity(self.virtual_context, JacobianWrtVariable.kQDot,
                 self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
         # ignore gripper and drone terms
         J = J[:,7:14-1]
+        # ignore specified rot axes
+        J = J[rot_axes + [3,4,5],:]
 
         # velocity only (TODO: use current pose)
         if R is None:
             J = J[-3:,:]
             target_vel = p_dot
         else:
-            target_vel = np.concatenate([theta_dot, p_dot])
+            target_vel = np.concatenate([theta_dot[rot_axes], p_dot])
 
         ## QP approach
         prog = MathematicalProgram()
@@ -582,7 +589,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
                 Rf = Rf @ R0
             
             return utils.QuinticSplineR(p0, v0, np.zeros_like(p0), R0,
-                        pf, vf, af, Rf, constructor.T, name=constructor.name)
+                        pf, vf, af, Rf, constructor.T, rot_axes=constructor.rot_axes, name=constructor.name)
         else:
             print(f"Unknown space: {constructor.space}")
     
@@ -594,7 +601,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         q0_dot = self.qdot_cur
 
         # slow to stop
-        qd = q0 + q0_dot*0.2
+        qd = q0 + q0_dot*0.05
         s = utils.QuinticSpline(q0, q0_dot, np.zeros_like(q0),
                                 qd, np.zeros_like(qd), np.zeros_like(qd),
                                 0.1, name="slow")
@@ -659,9 +666,10 @@ class ArmTrajectoryPlanner2(LeafSystem):
         p_grasp = X_DG.translation() + np.array([0.,0.010,0])
         
         duration = t_grasp - t_start - self.start_time - 1e-1
-        c = utils.SegmentConstructor("position", duration,
+        c = utils.SegmentConstructor("pose", duration,
                 p_grasp, vel.translational(), final_accel, delta=[False, False],
-                Rf=X_DG.rotation().matrix(), delta_R=False, name="grasp")
+                Rf=X_DG.rotation().matrix(), delta_R=False, rot_axes=[1,2], name="grasp")
+        # ignore x-axis rotation
         self.segments.append(c)
 
         duration = 0.5

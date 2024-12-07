@@ -13,6 +13,8 @@ from pydrake.all import (
     ProcessModelDirectives,
     MeshcatVisualizer,
     Simulator,
+    VisualizationConfig,
+    ApplyVisualizationConfig,
 )
 
 from utils import make_bspline
@@ -66,6 +68,9 @@ if __name__ == '__main__':
 
     # Add visualizer
     meshcat_vis = MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat)
+    visualization = VisualizationConfig()
+    ApplyVisualizationConfig(visualization, builder, meshcat=meshcat)
+
     animator = meshcat_vis.StartRecording()
     animator = None # stop auto-tracking of drone movement
 

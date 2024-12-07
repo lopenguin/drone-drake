@@ -235,11 +235,12 @@ class QuinticSpline(Segment):
         
 class QuinticSplineR(QuinticSpline):
     # Initialize.
-    def __init__(self, p0, v0, a0, R0, pf, vf, af, Rf, T, name=""):
+    def __init__(self, p0, v0, a0, R0, pf, vf, af, Rf, T, rot_axes=[0,1,2], name=""):
         QuinticSpline.__init__(self,  p0, v0, a0, pf, vf, af, T, name)
         self.R0 = R0
         self.Rf = Rf
         (self.axis, self.tot_angle) = axisangle_from_R(R0.T @ Rf)
+        self.rot_axes=rot_axes
 
 class SegmentConstructor():
     '''
@@ -251,7 +252,7 @@ class SegmentConstructor():
     pose space:
         - qf is positions, Rf is rotations
     '''
-    def __init__(self, space, T, qf, qf_dot, qf_ddot, delta=[False,False], Rf=None, delta_R=False, name=""):
+    def __init__(self, space, T, qf, qf_dot, qf_ddot, delta=[False,False], Rf=None, delta_R=False, rot_axes=[0,1,2], name=""):
         self.space = space
         self.T = T
         self.qf = qf
@@ -261,6 +262,7 @@ class SegmentConstructor():
 
         self.Rf = Rf
         self.delta_R = delta_R
+        self.rot_axes = rot_axes
         self.name = name
 
 # reference: http://www.farinhansford.com/gerald/classes/cse570/additions/orientation.pdf

@@ -303,6 +303,18 @@
         <!-- <drake:hunt_crossley_dissipation value="1.25"/> -->
       </drake:proximity_properties>
     </collision>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.115 0 -0.03"/>
+      <geometry>
+        <box size="0.05 0.035 0.01"/>
+      </geometry>
+      <drake:proximity_properties>
+        <drake:compliant_hydroelastic/>
+        <drake:mesh_resolution_hint value="0.1"/>
+        <drake:hydroelastic_modulus value="5e7"/>
+        <!-- <drake:hunt_crossley_dissipation value="1.25"/> -->
+      </drake:proximity_properties>
+    </collision>
     <inertial>
       <origin rpy="0.006393076449033863 0.2928526604761865 -0.022814984050994802" xyz="0.12516802549362183 0.00010137435310753062 -0.013997982256114483"/>
       <mass value="0.0785"/>
@@ -386,7 +398,7 @@
       <drake:proximity_properties>
         <drake:compliant_hydroelastic/>
         <drake:mesh_resolution_hint value="0.1"/>
-        <drake:hydroelastic_modulus value="5e5"/>
+        <drake:hydroelastic_modulus value="5e7"/>
         <!-- <drake:hunt_crossley_dissipation value="1.25"/> -->
       </drake:proximity_properties>
     </collision>
@@ -397,7 +409,7 @@
       <drake:proximity_properties>
         <drake:compliant_hydroelastic/>
         <drake:mesh_resolution_hint value="0.1"/>
-        <drake:hydroelastic_modulus value="5e5"/>
+        <drake:hydroelastic_modulus value="5e7"/>
         <!-- <drake:hunt_crossley_dissipation value="1.25"/> -->
       </drake:proximity_properties>
     </collision>
