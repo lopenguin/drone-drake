@@ -258,7 +258,8 @@ class ArmTrajectoryPlanner2(LeafSystem):
         # first time setup
         if len(self.segments) == 0:
             # creates basic segments
-            self.make_initial_traj()
+            # self.make_initial_traj()
+            self.make_demo_traj()
             self.start_time = t
             print(f"Executing {self.segments[0].name}...")
             self.draw_target(self.segments[0])
@@ -280,7 +281,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         if t > 1. and self.do_first_calc:
             self.do_first_calc = False
             t_grasp = 3.2
-            self.make_static_plan(context, t_grasp)
+            # self.make_static_plan(context, t_grasp)
 
         # TEMP: draw grasp
         if t > 3.510 and self.not_drawn:
@@ -300,7 +301,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         current_segment = self.segments[0]
         # move to next segment if needed
         if t > (self.start_time + current_segment.duration()):
-            self.segments.pop(0)
+            last_segment = self.segments.pop(0)
             self.start_time = t
             if len(self.segments) == 0:
                 self.terminate()
@@ -312,6 +313,16 @@ class ArmTrajectoryPlanner2(LeafSystem):
 
             # draw target position
             self.draw_target(current_segment)
+
+            # print distance from desired position (translation only)
+            pf = last_segment.get_pf()
+            print(pf)
+            if pf.shape[0] != 6:
+                pf = pf[:3] # desired final position (quadrotor frame)
+                X_now = self.fkin(np.append(self.q_cur, self.q_gripper))
+                print(X_now.translation())
+                print(np.linalg.norm(pf - X_now.translation()))
+
         
         # execute current segment
         q = current_segment.evaluate(t - self.start_time)
@@ -325,6 +336,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             p_ddot = q_ddot
 
             # (differential) inverse kinematics
+            # q, q_dot, q_ddot = self.ikin_hessian(p, p_dot, p_ddot)
             q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot)
 
         # [x, y, z position, theta angle]
@@ -339,6 +351,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             theta_ddot = current_segment.axis * q_ddot[-1] # check
 
             # (differential) inverse kinematics
+            # q, q_dot, q_ddot = self.ikin_hessian(p, p_dot, p_ddot, R, theta_dot, theta_ddot, rot_axes=current_segment.rot_axes)
             q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot, R, theta_dot, theta_ddot, rot_axes=current_segment.rot_axes)
         elif q.shape[0] != 6:
             print("Unrecognized spline shape:", q.shape)
@@ -439,7 +452,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         delta_p_d3 = np.array([-0.1, 0.,-0.1])
         Rf3 = np.eye(3)
         duration = 1.0
-        c = utils.SegmentConstructor("pose", duration,
+        c = utils.SegmentConstructor("position", duration,
                 delta_p_d3, np.zeros_like(delta_p_d3), np.zeros_like(delta_p_d3), delta=[True, False],
                 Rf=Rf3, delta_R=True, name="whole")
         self.segments.append(c)
@@ -530,7 +543,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
         prog.AddBoundingBoxConstraint((lower - self.q_cur)/(N*self.plant.time_step()),
                                       (upper - self.q_cur)/(N*self.plant.time_step()), v)
 
-        # # constraint: joint velocities
+        # constraint: joint velocities
         v_max = 5.
         prog.AddBoundingBoxConstraint(-v_max, v_max, v)
 
@@ -548,6 +561,76 @@ class ArmTrajectoryPlanner2(LeafSystem):
         # discretely integrate to get q
         q = self.q_cur + q_dot*self.plant.time_step()
         q_ddot = np.zeros_like(q)
+
+        return q, q_dot, q_ddot
+    
+    def ikin_hessian(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None, rot_axes=[0,1,2]):
+        # implements computation of Hessian from https://arxiv.org/pdf/2010.08696
+        # then performs ikin with Hessian for accelerations, and discretely integrates to get velocity/joint angle commands
+        # in particular, Hessian can be computed from only components of Jacobian!
+
+        
+
+        # velocity only (TODO: use current pose)
+        if theta_dot is not None:
+            target_vel = np.concatenate([theta_dot, p_dot])
+        target_vel = p_dot
+        
+        
+        ## root finding via Newton's method
+        iters = 10
+        q_dot = self.qdot_cur
+        q = self.q_cur
+        dt = self.plant.time_step()
+        for k in range(iters):
+            # forward kinematics
+            pose_cur = self.fkin(np.append(q, self.q_gripper)) # must call before calc jacobian to set positions
+            J = self.plant.CalcJacobianSpatialVelocity(self.virtual_context, JacobianWrtVariable.kQDot,
+                    self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
+            # ignore gripper and drone terms
+            J = J[:,7:14-1]
+            Jw = J[:3,:]
+            Jv = J[-3:,:]
+
+            # compute the Hessian
+            # rotational components
+            H = np.zeros([6,6,6])
+            # # loop through # joints (TODO: vectorize)
+            # for i in range(6):
+            #     for j in range(6):
+            #         # rotational part
+            #         H[:3,i,j] = np.cross(Jw[:,j], Jw[:,i]) # eq 64
+            #         # translational part
+            #         H[-3:,i,j] = np.cross(Jw[:,min(i,j)], Jv[:,max(i,j)])
+            # rotational part
+            idx_i, idx_j = np.meshgrid(np.arange(6), np.arange(6), indexing='ij')
+            H[:3, idx_i, idx_j] = np.cross(Jw[:, idx_j], Jw[:, idx_i], axisa=0, axisb=0, axisc=0)
+            # translational part
+            min_idx = np.minimum(idx_i, idx_j)
+            max_idx = np.maximum(idx_i, idx_j)
+            H[-3:, idx_i, idx_j] = np.cross(Jw[:, min_idx], Jv[:, max_idx], axisa=0, axisb=0, axisc=0)
+            # TEMP
+            J = Jv
+            H = H[-3:,:,:]
+
+            g = J @ q_dot + dt*(H @ q_dot) @ q_dot - target_vel
+            HJ = J + dt*(H @ q_dot)
+
+
+            HJ_inv = HJ.T @ np.linalg.inv(HJ @ HJ.T) # + 0.05**2 * np.eye(HJ.shape[0]))
+            
+            
+            delta = HJ_inv @ g
+
+            q_dot = np.clip(q_dot - delta, -5, 5)
+            q = self.q_cur + q_dot*dt
+            if np.max(np.abs(delta)) < 1e-3:
+                break
+
+        # discretely integrate to get q
+        q = self.q_cur + q_dot*self.plant.time_step()
+        q_ddot = np.zeros_like(q)
+
 
         return q, q_dot, q_ddot
     

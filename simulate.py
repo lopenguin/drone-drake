@@ -32,15 +32,15 @@ def save_diagram(diagram):
 if __name__ == '__main__':
     ## Basic drone trajectory
     # in poses
-    start = np.array([-1.5,0,1.]).reshape([3,1])
-    end = np.array([1.5,0,1.]).reshape([3,1])
-    intermediate = np.array([0.,0,-0.6]).reshape([3,1])
-    trajectory = make_bspline(start, end, intermediate,[1.,2,4,5.])
+    # start = np.array([-1.5,0,1.]).reshape([3,1])
+    # end = np.array([1.5,0,1.]).reshape([3,1])
+    # intermediate = np.array([0.,0,-0.6]).reshape([3,1])
+    # trajectory = make_bspline(start, end, intermediate,[1.,2,4,5.])
 
-    # start = np.array([0,0,1.]).reshape([3,1])
-    # end = np.array([0,0,1.]).reshape([3,1])
-    # intermediate = np.array([0.,0,1]).reshape([3,1])
-    # trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.5,3.])
+    start = np.array([0,0,1.]).reshape([3,1])
+    end = np.array([0,0,1.]).reshape([3,1])
+    intermediate = np.array([0.,0,1]).reshape([3,1])
+    trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.5,5.])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -76,7 +76,7 @@ if __name__ == '__main__':
 
     ## Drone
     # low-level controller
-    drone_controller = builder.AddNamedSystem("drone_controller", Control.DroneRotorController(plant, meshcat, plot_traj=True))
+    drone_controller = builder.AddNamedSystem("drone_controller", Control.DroneRotorController(plant, meshcat, plot_traj=False))
     builder.Connect(plant.get_body_poses_output_port(), drone_controller.input_poses_port)
     builder.Connect(plant.get_body_spatial_velocities_output_port(), drone_controller.input_vels_port)
     builder.Connect(drone_controller.output_port, plant.get_applied_spatial_force_input_port())
