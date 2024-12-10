@@ -264,10 +264,13 @@ class ArmTrajectoryPlanner2(LeafSystem):
             self.draw_target(self.segments[0])
 
             # draw grasp
-            side_grasp = RigidTransform(RotationMatrix(AngleAxis(np.pi,np.array([1.,0.,0.]))), np.array([-0.05,-0.03,0.]))
-            top_grasp  = RigidTransform(RotationMatrix(np.array([[0, 1, 0], [1, 0, 0], [0, 0, -1]]).T), np.array([0.,-0.09,0.]))
-            self.grasp_pose_sugar_frame = side_grasp
+            side_grasp = RigidTransform(RotationMatrix(AngleAxis(np.pi,np.array([1.,0.,0.]))), np.array([-0.08,-0.03,0.]))
+            side_grasp2 = RigidTransform(RotationMatrix(AngleAxis(np.pi,np.array([1.,0.,0.]))), np.array([-0.08,-0.06,0.]))
+            top_grasp  = RigidTransform(RotationMatrix(np.array([[0, 1, 0], [1, 0, 0], [0, 0, -1]]).T), np.array([0.,-0.105,0.]))
+            self.grasp_pose_sugar_frame = top_grasp
             utils.plot_ref_frame(self.meshcat, "visualizer/sugar_box/base_link_sugar/grasp", self.grasp_pose_sugar_frame)
+            utils.plot_ref_frame(self.meshcat, "visualizer/sugar_box/base_link_sugar/grasp2", side_grasp2)
+            input()
             utils.plot_ref_frame(self.meshcat, "visualizer/drone/quadrotor_link/home", RigidTransform())
             # TODO:
             # convert grasp frame to drone frame AT TIME OF GRASP
@@ -338,8 +341,10 @@ class ArmTrajectoryPlanner2(LeafSystem):
             theta_dot = current_segment.axis * q_dot[-1]
             theta_ddot = current_segment.axis * q_ddot[-1] # check
 
+            grasp_prep = (current_segment.name == "grasp")
+
             # (differential) inverse kinematics
-            q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot, R, theta_dot, theta_ddot, rot_axes=current_segment.rot_axes)
+            q, q_dot, q_ddot = self.ikin(p, p_dot, p_ddot, R, theta_dot, theta_ddot, rot_axes=current_segment.rot_axes)#, grasp_prep=grasp_prep)
         elif q.shape[0] != 6:
             print("Unrecognized spline shape:", q.shape)
             input()
@@ -362,6 +367,7 @@ class ArmTrajectoryPlanner2(LeafSystem):
             gripper_q = -1.5
             gripper_qdot = -15
         if (np.linalg.norm(X_EG.translation()) < 0.12):
+        # if (np.linalg.norm(X_EG.translation()) < 0.1):
             gripper_qdot = 50 * np.linalg.norm(X_EG.translation())/ 0.12
             if self.gripper_opened_time > t:
                 self.gripper_opened_time = t
@@ -477,77 +483,156 @@ class ArmTrajectoryPlanner2(LeafSystem):
 
         return q, q_dot, q_ddot
     
-    def ikin(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None, rot_axes=[0,1,2]):
-        # forward kinematics
-        pose_cur = self.fkin(np.append(self.q_cur, self.q_gripper)) # must call before calc jacobian to set positions
-        J = self.plant.CalcJacobianSpatialVelocity(self.virtual_context, JacobianWrtVariable.kQDot,
-                self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
-        # ignore gripper and drone terms
-        J = J[:,7:14-1]
-        # ignore specified rot axes
-        J = J[rot_axes + [3,4,5],:]
+    def ikin(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None, rot_axes=[0,1,2], grasp_prep=False):
+        for i in range(4):
+            # forward kinematics
+            pose_cur = self.fkin(np.append(self.q_cur, self.q_gripper)) # must call before calc jacobian to set positions
+            J = self.plant.CalcJacobianSpatialVelocity(self.virtual_context, JacobianWrtVariable.kQDot,
+                    self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
+            # ignore gripper and drone terms
+            J_full = J[:,7:14-1]
+            # ignore specified rot axes
+            J = J_full[rot_axes + [3,4,5],:]
 
+            # velocity only (TODO: use current pose)
+            if R is None:
+                J = J[-3:,:]
+                target_vel = p_dot
+            else:
+                target_vel = np.concatenate([theta_dot[rot_axes], p_dot])
+
+            ## QP approach
+            prog = MathematicalProgram()
+            # joint velocities
+            v = prog.NewContinuousVariables(6, "v")
+            prog.SetInitialGuess(v, np.array(self.qdot_cur) + np.random.randn(*self.qdot_cur.shape)*0.01)
+            # velocity scale
+            a = prog.NewContinuousVariables(1, "alpha")
+            prog.SetInitialGuess(a[0], 1.)
+            prog.AddBoundingBoxConstraint(0.,1.,a)
+
+            # cost: velocity in desired direction
+            prog.AddLinearCost(-np.array([1]), 0., a)
+
+            # cost: joint centering (in null space)
+            # we can't do joint centering since the arm is 6 dof
+            # # P*(v - N*K_center*(q_centered - q_cur))
+            # N = 2.
+            # K_center = 10.
+            # P = null_space(J)
+            # lower = self.plant.GetPositionLowerLimits()[7:13]
+            # upper = self.plant.GetPositionUpperLimits()[7:13]
+            # q_center = (lower+upper)/2.
+            # prog.Add2NormSquaredCost(P, P*N*K_center*(q_center - self.q_cur))
+
+            # constraint: J * v = a * target_vel
+            A = np.hstack([J, -target_vel.reshape(target_vel.shape[0],1)])
+            prog.AddLinearEqualityConstraint(A, np.zeros(A.shape[0]), np.concatenate([v,a]))
+
+            # constraint: joint limits
+            # min <= q_cur + N*v*dt <= max
+            lower = self.plant.GetPositionLowerLimits()[7:13]
+            upper = self.plant.GetPositionUpperLimits()[7:13]
+            N = 2.
+            prog.AddBoundingBoxConstraint((lower - self.q_cur)/(N*self.plant.time_step()),
+                                        (upper - self.q_cur)/(N*self.plant.time_step()), v)
+
+            # # constraint: joint velocities
+            v_max = 5.
+            prog.AddBoundingBoxConstraint(-v_max, v_max, v)
+
+            # cost: rotation error about left out axes
+            if grasp_prep:
+                left_out_axes = list({0,1,2} - set(rot_axes))
+                if len(left_out_axes) > 0:
+                    # Jl * v = target_vel_l
+                    weight = 0.05
+                    prog.Add2NormSquaredCost(weight*J_full[left_out_axes,:], weight*target_vel[left_out_axes], v)
+
+
+
+
+            # solve
+            solver = SnoptSolver()
+            result = solver.Solve(prog)
+
+            if (result.is_success()):
+                q_dot = result.GetSolution(v)
+
+                # discretely integrate to get q
+                q = self.q_cur + q_dot*self.plant.time_step()
+                q_ddot = np.zeros_like(q)
+
+                return q, q_dot, q_ddot
+
+        raise ValueError("Could not find the optimal solution.")
+    
+    def ikin_hessian(self, p, p_dot, p_ddot, R=None, theta_dot=None, theta_ddot=None, rot_axes=[0,1,2]):
+        # implements computation of Hessian from https://arxiv.org/pdf/2010.08696
+        # then performs ikin with Hessian for accelerations, and discretely integrates to get velocity/joint angle commands
+        # in particular, Hessian can be computed from only components of Jacobian!
         # velocity only (TODO: use current pose)
         if R is None:
-            J = J[-3:,:]
             target_vel = p_dot
+            rot_axes = []
         else:
             target_vel = np.concatenate([theta_dot[rot_axes], p_dot])
+        
+        
+        ## root finding via Newton's method
+        iters = 10
+        q_dot = self.qdot_cur
+        q = self.q_cur
+        dt = self.plant.time_step()
+        for k in range(iters):
+            # forward kinematics
+            pose_cur = self.fkin(np.append(q, self.q_gripper)) # must call before calc jacobian to set positions
+            J = self.plant.CalcJacobianSpatialVelocity(self.virtual_context, JacobianWrtVariable.kQDot,
+                    self.end_effector_frame, [0, 0, 0], self.drone_frame, self.drone_frame)
+            # ignore gripper and drone terms
+            J = J[:,7:14-1]
+            Jw = J[:3,:]
+            Jv = J[-3:,:]
 
-        ## QP approach
-        prog = MathematicalProgram()
-        # joint velocities
-        v = prog.NewContinuousVariables(6, "v")
-        prog.SetInitialGuess(v, self.qdot_cur)
-        # velocity scale
-        a = prog.NewContinuousVariables(1, "alpha")
-        prog.SetInitialGuess(a[0], 1.)
-        prog.AddBoundingBoxConstraint(0.,1.,a)
+            # compute the Hessian
+            # rotational components
+            H = np.zeros([6,6,6])
+            # # loop through # joints (TODO: vectorize)
+            # for i in range(6):
+            #     for j in range(6):
+            #         # rotational part
+            #         H[:3,i,j] = np.cross(Jw[:,j], Jw[:,i]) # eq 64
+            #         # translational part
+            #         H[-3:,i,j] = np.cross(Jw[:,min(i,j)], Jv[:,max(i,j)])
+            # rotational part
+            idx_i, idx_j = np.meshgrid(np.arange(6), np.arange(6), indexing='ij')
+            H[:3, idx_i, idx_j] = np.cross(Jw[:, idx_j], Jw[:, idx_i], axisa=0, axisb=0, axisc=0)
+            # translational part
+            min_idx = np.minimum(idx_i, idx_j)
+            max_idx = np.maximum(idx_i, idx_j)
+            H[-3:, idx_i, idx_j] = np.cross(Jw[:, min_idx], Jv[:, max_idx], axisa=0, axisb=0, axisc=0)
+            # TEMP
+            J = J[rot_axes + [3,4,5],:]
+            H = H[rot_axes + [3,4,5],:,:]
 
-        # cost: velocity in desired direction
-        prog.AddLinearCost(-np.array([1]), 0., a)
-
-        # cost: joint centering (in null space)
-        # we can't do joint centering since the arm is 6 dof
-        # # P*(v - N*K_center*(q_centered - q_cur))
-        # N = 2.
-        # K_center = 10.
-        # P = null_space(J)
-        # lower = self.plant.GetPositionLowerLimits()[7:13]
-        # upper = self.plant.GetPositionUpperLimits()[7:13]
-        # q_center = (lower+upper)/2.
-        # prog.Add2NormSquaredCost(P, P*N*K_center*(q_center - self.q_cur))
-
-        # constraint: J * v = a * target_vel
-        A = np.hstack([J, -target_vel.reshape(target_vel.shape[0],1)])
-        prog.AddLinearEqualityConstraint(A, np.zeros(A.shape[0]), np.concatenate([v,a]))
-
-        # constraint: joint limits
-        # min <= q_cur + N*v*dt <= max
-        lower = self.plant.GetPositionLowerLimits()[7:13]
-        upper = self.plant.GetPositionUpperLimits()[7:13]
-        N = 2.
-        prog.AddBoundingBoxConstraint((lower - self.q_cur)/(N*self.plant.time_step()),
-                                      (upper - self.q_cur)/(N*self.plant.time_step()), v)
-
-        # # constraint: joint velocities
-        v_max = 5.
-        prog.AddBoundingBoxConstraint(-v_max, v_max, v)
+            g = J @ q_dot + dt*(H @ q_dot) @ q_dot - target_vel
+            HJ = J + dt*(H @ q_dot)
 
 
+            HJ_inv = HJ.T @ np.linalg.inv(HJ @ HJ.T) # + 0.05**2 * np.eye(HJ.shape[0]))
+            
+            
+            delta = HJ_inv @ g
 
-        # solve
-        solver = SnoptSolver()
-        result = solver.Solve(prog)
-
-        if not (result.is_success()):
-            raise ValueError("Could not find the optimal solution.")
-
-        q_dot = result.GetSolution(v)
+            q_dot = np.clip(q_dot - delta, -5, 5)
+            q = self.q_cur + q_dot*dt
+            if np.max(np.abs(delta)) < 1e-3:
+                break
 
         # discretely integrate to get q
         q = self.q_cur + q_dot*self.plant.time_step()
         q_ddot = np.zeros_like(q)
+
 
         return q, q_dot, q_ddot
     
@@ -638,6 +723,8 @@ class ArmTrajectoryPlanner2(LeafSystem):
         utils.plot_ref_frame(self.meshcat, f"visualizer/drone/quadrotor_link/{segment.name}", pose)
 
     def make_static_plan(self, context, t_grasp):
+        t_grasp = 3.3
+        # t_grasp = 1.79
         # simulate world at time of grasp
         # assume sugar box is static
         state_sugar = self.sugar_input_port.Eval(context)
@@ -664,22 +751,31 @@ class ArmTrajectoryPlanner2(LeafSystem):
         # velocity of grasp in quadrotor frame
         vel = self.sugar_frame.CalcSpatialVelocity(self.virtual_context, self.drone_frame, self.drone_frame)
 
+        grasp_vel = vel.translational() #- np.array([1.2, 0., 0.]) 
+        # grasp_vel = np.zeros(3)
+
         # add segment to reach pose and velocity at t_grasp
         t_start = 0.
         for s in self.segments:
             t_start += s.T
 
         # TODO: probably should remove this eventually
-        final_accel = 3.0 * vel.translational() / np.linalg.norm(vel.translational())
+        if np.linalg.norm(grasp_vel) > 0.1:
+            final_accel = 5.0 * grasp_vel / np.linalg.norm(grasp_vel)
+        else:
+            final_accel = np.zeros_like(grasp_vel)
         # TODO: DEFINITELY should remove this eventually
         p_grasp = X_DG.translation() + np.array([0.,0.010,0])
         
-        duration = t_grasp - t_start - self.start_time - 1e-1
+        duration = t_grasp - t_start - self.start_time - 1e-3
         c = utils.SegmentConstructor("pose", duration,
-                p_grasp, vel.translational(), final_accel, delta=[False, False],
-                Rf=X_DG.rotation().matrix(), delta_R=False, rot_axes=[1,2], name="grasp")
+                p_grasp, grasp_vel, final_accel, delta=[False, False],
+                Rf=X_DG.rotation().matrix(), delta_R=False, rot_axes=[0,2], name="grasp")
         # ignore x-axis rotation
         self.segments.append(c)
+
+        print("Drone speed:", np.linalg.norm(vel.translational()))
+        print("Relative speed:", np.linalg.norm(vel.translational() - grasp_vel))
 
         # duration = 0.25
         # s = utils.QuinticSpline(p_grasp, vel.translational(), final_accel,
@@ -692,8 +788,8 @@ class ArmTrajectoryPlanner2(LeafSystem):
         #                         duration, name="raise")
         # self.segments.append(s)
 
-        duration = 0.5
-        s = utils.QuinticSpline(p_grasp, vel.translational(), final_accel,
+        duration = .5
+        s = utils.QuinticSpline(p_grasp, grasp_vel, final_accel,
                                 p_grasp + np.array([0.,0.,0.05]), np.zeros(3), np.zeros(3),
                                 duration, name="post grasp raise")
         self.segments.append(s)

@@ -15,6 +15,8 @@ from pydrake.all import (
     Simulator,
     VisualizationConfig,
     ApplyVisualizationConfig,
+    RigidTransform,
+    RotationMatrix,
 )
 
 from utils import make_bspline
@@ -32,15 +34,25 @@ def save_diagram(diagram):
 if __name__ == '__main__':
     ## Basic drone trajectory
     # in poses
-    start = np.array([-1.5,0,1.]).reshape([3,1])
+    # start = np.array([-1.5,0,1.]).reshape([3,1]) + np.random.randn(3,1)*0.1
+    # end = np.array([1.5,0,1.]).reshape([3,1])
+    # intermediate = np.array([0.,0,-0.6]).reshape([3,1])
+    # trajectory = make_bspline(start, end, intermediate,[1.,2,4,5.])
+
+    start = np.array([-1.5,0,1.]).reshape([3,1]) + np.random.randn(3,1)*0.1
     end = np.array([1.5,0,1.]).reshape([3,1])
-    intermediate = np.array([0.,0,-0.6]).reshape([3,1])
+    intermediate = np.array([0.,0,0.1]).reshape([3,1])
     trajectory = make_bspline(start, end, intermediate,[1.,2,4,5.])
+
+    # start = np.array([-1.5,0,1.]).reshape([3,1]) + np.random.randn(3,1)*0.1
+    # end = np.array([1.5,0,1.]).reshape([3,1])
+    # intermediate = np.array([0.,0,-0.6]).reshape([3,1])
+    # trajectory = make_bspline(start, end, intermediate,[1.,1.5,2,2.5])
 
     # start = np.array([0,0,1.]).reshape([3,1])
     # end = np.array([0,0,1.]).reshape([3,1])
     # intermediate = np.array([0.,0,1]).reshape([3,1])
-    # trajectory = make_bspline(start, end, intermediate,[1.,1.1,1.5,3.])
+    # trajectory = make_bspline(start, end, intermediate,[1.,1.5,2.5,3.])
 
     ## Simulation
     # Start meshcat: URL will appear in command line
@@ -62,6 +74,8 @@ if __name__ == '__main__':
     parser.package_map().PopulateFromFolder("aerial_grasping")
     directives = LoadModelDirectives(model_directive_file)
     models = ProcessModelDirectives(directives, plant, parser)
+    # override drone free body pose
+    plant.SetDefaultFreeBodyPose(plant.GetBodyByName("quadrotor_link"),RigidTransform(RotationMatrix(),start))
     ApplyMultibodyPlantConfig(plant_config, plant)
 
     plant.Finalize()
@@ -76,7 +90,7 @@ if __name__ == '__main__':
 
     ## Drone
     # low-level controller
-    drone_controller = builder.AddNamedSystem("drone_controller", Control.DroneRotorController(plant, meshcat, plot_traj=True))
+    drone_controller = builder.AddNamedSystem("drone_controller", Control.DroneRotorController(plant, meshcat, plot_traj=False))
     builder.Connect(plant.get_body_poses_output_port(), drone_controller.input_poses_port)
     builder.Connect(plant.get_body_spatial_velocities_output_port(), drone_controller.input_vels_port)
     builder.Connect(drone_controller.output_port, plant.get_applied_spatial_force_input_port())
